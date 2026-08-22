@@ -64,6 +64,24 @@ server -> {"type":"ready"}
 
 PCM travels headerless at 24 kHz mono 16-bit; the server wraps it.
 
+## When the agent speaks for itself
+
+The agent has its own text-to-speech tool, and when it decides to use it the
+audio goes wherever that tool sends it - a chat app - not here. All that
+reaches this socket is the tool call. Chat content parts are text only; that
+was verified by logging every part with no `text` field across runs where the
+agent definitely produced speech, and nothing ever appeared.
+
+So the board used to sit in silence through those lines and then play the
+agent's follow-up, which is written assuming you already heard them: "there,
+read it out, did you catch that?" after nothing at all.
+
+The tool call carries the line it meant to say, so that text is taken and
+spoken through this proxy like any other. Only the text - which keeps the
+arrangement the same as everywhere else here. It is picked up on the tool's
+`start` rather than its `end`, because the text is complete either way and
+start comes about two seconds earlier.
+
 ## Why a turn takes three seconds and not twenty
 
 Three measured changes, in order of how much they were worth.

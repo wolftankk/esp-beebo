@@ -220,6 +220,12 @@ async function runTurn(ws, pcm) {
       }).catch((e) => console.error("[relay] segment failed:", e.message));
     };
 
+    /* Lines the agent chose to say out loud through its own tts tool. They
+     * never appear in the reply text, so without this the board stays silent
+     * through them and then plays whatever the agent said afterwards - which
+     * is written assuming you already heard them. */
+    const spokenAside = [];
+
     let shown = 0;
     const reply = await ask(heard, (full) => {
       /* Show it arriving. The board used to get one finished block of text at
@@ -230,16 +236,27 @@ async function runTurn(ws, pcm) {
         send(ws, { type: "reply.partial", text: speakable(full, false) });
       }
       const pending = full.slice(spokenUpTo);
-      const n = completeSentenceLength(pending, index === 0);
+      /* openerPending, not "index === 0": indices are handed out when a
+       * segment is sent, which is later and inside the chain. */
+      const n = completeSentenceLength(pending, openerPending);
       if (n > 0) {
         flush(pending.slice(0, n));
         spokenUpTo += n;
       }
+    }, (aside) => {
+      spokenAside.push(aside.trim());
+      send(ws, { type: "reply.partial", text: speakable(aside, false) });
+      flush(aside);
     });
     const tAgent = Date.now();
     send(ws, { type: "reply", text: reply });
 
-    if (reply.length > spokenUpTo) flush(reply.slice(spokenUpTo));
+    /* The agent sometimes repeats its spoken line in the reply as well; saying
+     * it twice is worse than not saying it. */
+    const tail = reply.slice(spokenUpTo).trim();
+    if (tail && !spokenAside.some((a) => a && (a === tail || tail.includes(a)))) {
+      flush(reply.slice(spokenUpTo));
+    }
     await chain;
     send(ws, { type: "turn.done" });
 

@@ -120,6 +120,10 @@ class GatewayClient {
         w.resolve(m);
         return;
       }
+      /* Chat content is text only. Verified by logging every part that had no
+       * .text field across runs where the agent definitely produced speech:
+       * nothing ever appeared. Audio the agent makes does not cross the
+       * gateway at all - see the tool item below. */
       if (m.type === "event" && m.event === "chat" && m.payload) {
         const w = this.runs.get(m.payload.runId);
         if (w && m.payload.state === "delta") {
@@ -139,6 +143,34 @@ class GatewayClient {
         }
         return;
       }
+      /* When the agent decides to speak, it calls its own tts tool and the
+       * audio goes wherever that tool sends it - a chat app, not here. All
+       * that reaches this socket is the tool call, whose meta field is the
+       * line it meant to say.
+       *
+       * Without this the board hears nothing and then plays the agent's
+       * follow-up, which is written on the assumption you already heard the
+       * first part: "there, read it out three times, had enough yet?" after
+       * complete silence.
+       *
+       * Only the text is taken, which keeps the arrangement the same as
+       * everywhere else here - what crosses from the agent is words, and
+       * turning words into speech is this proxy's job. Fired on "start"
+       * rather than "end" because the text is complete either way and start
+       * comes about two seconds earlier. */
+      if (m.type === "event" && m.event === "agent" &&
+          m.payload?.stream === "item" && m.payload?.data?.kind === "tool" &&
+          m.payload?.data?.name === "tts" && m.payload?.data?.phase === "start") {
+        const w = this.runs.get(m.payload.runId);
+        const said = m.payload.data.meta || "";
+        const id = m.payload.data.toolCallId;
+        if (w && said && w.spokenTools && !w.spokenTools.has(id)) {
+          w.spokenTools.add(id);
+          if (w.onSpeak) w.onSpeak(said);
+        }
+        return;
+      }
+
       /* A run that ends without a final chat event would otherwise hang the
        * caller until its timeout; treat the lifecycle end as a backstop. */
       if (m.type === "event" && m.event === "agent" &&
@@ -223,9 +255,12 @@ class GatewayClient {
 
   /* chat.send only acknowledges with a runId - the answer streams back as
    * chat events, so the wait belongs here rather than in every caller. */
-  /* onDelta receives the reply text as it grows. Without it this behaves as
+  /* onSpeak receives a line the agent chose to say out loud via its own tts
+   * tool, which never reaches the reply text.
+   *
+   * onDelta receives the reply text as it grows. Without it this behaves as
    * before and simply resolves with the finished reply. */
-  async chat(message, sessionKey, timeoutMs = 180000, onDelta = null) {
+  async chat(message, sessionKey, timeoutMs = 180000, onDelta = null, onSpeak = null) {
     /* The `agent` method rather than `chat.send`, because only this one takes
      * `thinking`. Left at its default the model spent fifteen of a sixteen
      * second turn reasoning before writing a word, which no amount of
@@ -251,7 +286,8 @@ class GatewayClient {
         this.runs.delete(runId);
         reject(new Error("agent run timed out"));
       }, timeoutMs);
-      this.runs.set(runId, { resolve, timer, partial: "", onDelta });
+      this.runs.set(runId, { resolve, timer, partial: "", onDelta, onSpeak,
+                             spokenTools: new Set() });
     });
   }
 

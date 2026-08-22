@@ -107,9 +107,9 @@ async function transcribe(wav) {
  * sense while this ran on the OpenClaw host; here that binary does not exist,
  * and a fallback that cannot work only disguises connection problems as
  * something else. Failing plainly is easier to diagnose. */
-async function ask(text, onDelta = null) {
+async function ask(text, onDelta = null, onSpeak = null) {
   if (!gw.ready) throw new Error("gateway not connected");
-  return gw.chat(text + VOICE_STYLE, SESSION, 180000, onDelta);
+  return gw.chat(text + VOICE_STYLE, SESSION, 180000, onDelta, onSpeak);
 }
 
 /* Whatever the model writes still has to be read aloud, so strip what only
