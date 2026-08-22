@@ -50,6 +50,13 @@ typedef struct { uint8_t *data; int len;
 static esp_websocket_client_handle_t s_ws;
 static QueueHandle_t s_segments;
 static volatile bool s_online, s_capturing, s_busy;
+/* When the turn in flight started. s_busy is cleared by turn.done or by the
+ * socket dropping, and a turn that ends in neither - an upload that failed
+ * without the client noticing, a proxy that threw - used to leave it set for
+ * good. The button then did nothing at all, silently, until a reboot. A flag
+ * that can only be cleared by the thing that is broken is not a flag. */
+static uint32_t s_busy_since;
+#define BUSY_MAX_MS 90000
 /* Resolved at connect time rather than baked in, so changing the address in
  * settings takes effect without a reflash. */
 static char s_url[128];
@@ -210,6 +217,13 @@ static void on_ws(void *arg, esp_event_base_t base, int32_t id, void *data)
     case WEBSOCKET_EVENT_DISCONNECTED:
         s_online = false;
         s_busy = false;
+        /* Also stop recording. Leaving this set kept the microphone open and
+         * the codec in capture mode for as long as the socket stayed down. */
+        if (s_capturing) {
+            s_capturing = false;
+            ESP_LOGW(TAG, "socket dropped mid-recording - capture abandoned");
+            ui_set_mood(MOOD_IDLE);
+        }
         ui_set_gw_ok(false);
         break;
 
@@ -330,6 +344,15 @@ static void ws_supervisor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
         if (!s_ws) continue;
 
+        /* A turn that never finished must not wedge the button for good. */
+        if (s_busy && s_busy_since &&
+            (xTaskGetTickCount() - s_busy_since) * portTICK_PERIOD_MS > BUSY_MAX_MS) {
+            ESP_LOGW(TAG, "turn never completed after %d s - releasing", BUSY_MAX_MS / 1000);
+            s_busy = false;
+            s_busy_since = 0;
+            ui_set_mood(MOOD_IDLE);
+        }
+
         if (!net_is_up()) { down_ticks = 0; continue; }   /* not our problem yet */
 
         if (s_online) {
@@ -429,7 +452,9 @@ esp_err_t voice_start_capture_task(void)
 void voice_start(void)
 {
     if (s_busy || !s_online) {
-        if (!s_online) ui_log("proxy offline");
+        /* Both refusals say so. A button that does nothing and explains
+         * nothing is indistinguishable from a broken one. */
+        ui_log(s_online ? "still working on the last one" : "proxy offline");
         return;
     }
     net_set_power_save(false);
@@ -442,6 +467,7 @@ void voice_stop(void)
     if (!s_capturing) return;
     s_capturing = false;
     s_busy = true;
+    s_busy_since = xTaskGetTickCount();
     ws_send_json("{\"type\":\"turn.end\"}");
     net_set_power_save(true);
 }

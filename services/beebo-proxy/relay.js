@@ -120,7 +120,7 @@ async function playWav(ws, wav) {
 
   for (let off = 0; off < pcm.length; off += step) {
     if (ws.readyState !== ws.OPEN || playCancelled) return index;
-    sendAudio(ws, index, wrapWav(pcm.subarray(off, off + step)), index > 0);
+    await sendAudio(ws, index, wrapWav(pcm.subarray(off, off + step)), index > 0);
     index++;
     if (index > PLAY_LEAD && off + step < pcm.length)
       await new Promise((r) => setTimeout(r, PLAY_SECONDS * 1000));
@@ -196,12 +196,29 @@ function completeSentenceLength(pending, opening) {
   return cut + 1 >= min ? cut + 1 : 0;
 }
 
-function sendAudio(ws, index, audio, holdGain) {
+/* Big segments are handed over in bursts with a breath between them.
+ *
+ * A music segment is 384 KB and used to go out in one synchronous run of
+ * ws.send calls. The board would take it, but its own uplink could not get a
+ * word in edgeways afterwards: the first thing the microphone tried to send
+ * came back "transport_poll_write(0)" and the socket died. Speech segments are
+ * small enough not to cause it and short enough that latency matters, so the
+ * pause only applies once a segment is large. */
+const BURST_BYTES = 64 * 1024;
+
+async function sendAudio(ws, index, audio, holdGain) {
   if (ws.readyState !== ws.OPEN) return;
   send(ws, { type: "audio.begin", index, bytes: audio.length, hold_gain: !!holdGain });
+
+  let sinceBreath = 0;
   for (let at = 0; at < audio.length; at += AUDIO_CHUNK) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(audio.subarray(at, Math.min(at + AUDIO_CHUNK, audio.length)));
+    sinceBreath += AUDIO_CHUNK;
+    if (audio.length > BURST_BYTES && sinceBreath >= BURST_BYTES) {
+      sinceBreath = 0;
+      await new Promise((r) => setTimeout(r, 20));
+    }
   }
   send(ws, { type: "audio.end", index });
 }
@@ -229,7 +246,7 @@ async function speakSegment(ws, text, nextIndex, splitHead) {
   if (!splitHead) {
     const parts = [];
     await synthesizeStream(text, (b) => parts.push(b));
-    return sendAudio(ws, nextIndex(), Buffer.concat(parts), false);
+    return await sendAudio(ws, nextIndex(), Buffer.concat(parts), false);
   }
 
   const parts = [];
@@ -240,15 +257,19 @@ async function speakSegment(ws, text, nextIndex, splitHead) {
     if (headSent || held < HEAD_BYTES) return;
     headSent = true;
     const all = Buffer.concat(parts);
-    sendAudio(ws, nextIndex(), all.subarray(0, HEAD_BYTES), false);
+    /* Inside a stream callback, so it cannot be awaited. The head is well
+     * under the burst threshold and never pauses, but the rejection still
+     * needs somewhere to go. */
+    sendAudio(ws, nextIndex(), all.subarray(0, HEAD_BYTES), false)
+      .catch((e) => console.error("[relay] head failed:", e.message));
     parts.length = 0;
     parts.push(all.subarray(HEAD_BYTES));       /* the tail starts here */
     held = 0;
   });
 
   const rest = Buffer.concat(parts);
-  if (!headSent) return sendAudio(ws, nextIndex(), rest, false);   /* too short to split */
-  if (rest.length) sendAudio(ws, nextIndex(), wrapWav(rest), true);
+  if (!headSent) return await sendAudio(ws, nextIndex(), rest, false);   /* too short to split */
+  if (rest.length) await sendAudio(ws, nextIndex(), wrapWav(rest), true);
 }
 
 async function runTurn(ws, pcm) {
@@ -380,6 +401,7 @@ function attach(httpServer) {
     ws.pcmLen = 0;
     ws.capturing = false;
     const who = req.socket.remoteAddress;
+    ws._who = who;
 
     ws.on("pong", () => { ws.isAlive = true; });
 
@@ -446,7 +468,10 @@ function attach(httpServer) {
 
   const beat = setInterval(() => {
     for (const ws of wss.clients) {
-      if (!ws.isAlive) { ws.terminate(); continue; }
+      if (!ws.isAlive) {
+        console.warn("[relay] no pong in 20 s - terminating", ws._who || "");
+        ws.terminate(); continue;
+      }
       ws.isAlive = false;
       ws.ping();
     }
