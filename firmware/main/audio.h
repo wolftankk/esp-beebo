@@ -51,6 +51,10 @@ void      audio_sound_async(audio_sound_t which);
  * face costs one pass over a buffer that was being copied anyway. */
 int       audio_output_level(void);
 
+/* True while a clip is being written out. Asking for the amplifier off during
+ * one defers the mute until it finishes rather than clipping the sentence. */
+bool      audio_is_playing(void);
+
 void      audio_chirp(void);   /* SND_BOOT, kept for existing call sites */
 void      audio_chime_async(void);   /* safe to call from a UI callback */
 

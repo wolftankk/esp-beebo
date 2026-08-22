@@ -651,6 +651,9 @@ static void dizzy_done_cb(lv_timer_t *t)
 void ui_shake(void)
 {
     if (s_screen_off || s_face_down) return;
+    /* Squawking over the answer it is in the middle of giving is worse than
+     * not reacting: picking the board up to look at it is not a complaint. */
+    if (audio_is_playing()) return;
     if (s_mood != MOOD_DIZZY) s_mood_before_dizzy =
         (s_mood == MOOD_DOZING) ? MOOD_IDLE : s_mood;
     audio_sound_async(SND_ERROR);
@@ -723,6 +726,22 @@ void ui_screen_on(void)
 }
 
 bool ui_screen_is_off(void) { return s_screen_off; }
+
+/* Mid-turn: listening, thinking, or partway through an answer. Distinct from
+ * "audio is playing", which goes false in the gap between two sentences - long
+ * enough for a shake to slip through and squawk over the reply. */
+/* The network came back after the face had already given up on it. Only
+ * touches the offline state, so it cannot interrupt a turn in progress. */
+void ui_clear_offline(void)
+{
+    if (s_mood != MOOD_OFFLINE || s_screen_off) return;
+    ui_set_mood(MOOD_IDLE);
+}
+
+bool ui_is_busy(void)
+{
+    return s_mood == MOOD_LISTENING || s_mood == MOOD_THINKING || s_mood == MOOD_SPEAKING;
+}
 
 void ui_notice_activity(void)
 {

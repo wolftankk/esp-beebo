@@ -44,6 +44,13 @@ void ui_screen_off(void);
 void ui_screen_on(void);
 bool ui_screen_is_off(void);
 
+/* True for the whole of a turn, including the gaps between spoken sentences.
+ * The IMU uses this to keep incidental handling from interrupting one. */
+bool ui_is_busy(void);
+
+/* An address arrived after the face had settled into MOOD_OFFLINE. */
+void ui_clear_offline(void);
+
 void ui_notice_activity(void);
 
 /* --- what the IMU feeds the face --- */

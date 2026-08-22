@@ -216,10 +216,11 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         xEventGroupSetBits(s_evt, BIT_GOT_IP);
         ps_apply();                       /* honour a nap requested while down */
         ui_set_wifi_state(true);
-        /* The socket backs off on its own schedule; tell it the network is
-         * back rather than making it wait out a retry it started while there
-         * was nothing to connect to. */
-        voice_kick();
+        /* Opens the socket the first time, and cuts short whatever backoff it
+         * is sitting in on later drops. Driving it from here rather than from
+         * the boot task means an address arriving late is still an address. */
+        voice_connect();
+        ui_clear_offline();
     }
 }
 

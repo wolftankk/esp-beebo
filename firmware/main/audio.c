@@ -172,6 +172,12 @@ esp_err_t audio_init(void)
 }
 
 static bool s_amp_on;
+/* Non-zero while a clip is being written to the codec. Muting the amplifier
+ * during one cuts the sentence off mid-word, and three separate things ask for
+ * that mute - nodding off, the screen going out, the board being set face
+ * down - none of which know or should know that audio is in flight. */
+static volatile int  s_playing;
+static volatile bool s_amp_off_pending;
 
 static inline void codec_unlock(void)
 {
@@ -180,10 +186,31 @@ static inline void codec_unlock(void)
 
 void audio_amp_enable(bool on)
 {
+    if (!on && s_playing) {
+        /* Deferred, not ignored: whatever wanted silence still gets it, once
+         * the sentence has finished rather than halfway through it. */
+        if (!s_amp_off_pending) ESP_LOGI(TAG, "amplifier off deferred - still playing");
+        s_amp_off_pending = true;
+        return;
+    }
+    if (on) s_amp_off_pending = false;
     if (on == s_amp_on) return;
     if (expander_set(EXIO_NS_MODE, on) == ESP_OK) {
         s_amp_on = on;
         ESP_LOGI(TAG, "amplifier %s", on ? "on" : "off");
+    }
+}
+
+bool audio_is_playing(void) { return s_playing != 0; }
+
+/* Called when a clip finishes: honours a mute that arrived while it ran. */
+static void playback_ended(void)
+{
+    if (--s_playing > 0) return;
+    s_out_level = 0;
+    if (s_amp_off_pending) {
+        s_amp_off_pending = false;
+        audio_amp_enable(false);
     }
 }
 
@@ -237,16 +264,22 @@ esp_err_t audio_play_pcm(const uint8_t *pcm, size_t len,
     if (!s_playback || !pcm || !len) return ESP_ERR_INVALID_ARG;
     /* Held across the whole clip: nothing may reopen the port underneath it. */
     codec_lock();
+    s_playing++;
     esp_err_t out = ESP_OK;
 
     /* The codec runs its slots in stereo; feed mono by duplicating samples
      * rather than reconfiguring, which keeps clip-to-clip switching silent. */
     if (channels == 1 && bits == 16) {
-        if (ensure_open(sample_rate, 2, 16) != ESP_OK) { codec_unlock(); return ESP_FAIL; }
+        if (ensure_open(sample_rate, 2, 16) != ESP_OK) {
+            playback_ended();
+            codec_unlock();
+            return ESP_FAIL;
+        }
         enum { FRAMES = 512 };
         int16_t *stereo = heap_caps_malloc(FRAMES * 2 * sizeof(int16_t), MALLOC_CAP_DMA);
         if (!stereo) {
             ESP_LOGE(TAG, "no DMA-capable memory for the mixdown buffer");
+            playback_ended();
             codec_unlock();
             return ESP_ERR_NO_MEM;
         }
@@ -278,23 +311,29 @@ esp_err_t audio_play_pcm(const uint8_t *pcm, size_t len,
                 ESP_LOGE(TAG, "codec write failed: %d (wrote %u of %u frames)",
                          rc, (unsigned)i, (unsigned)total);
                 free(stereo);
+                playback_ended();
                 codec_unlock();
                 return ESP_FAIL;
             }
         }
         free(stereo);
-        s_out_level = 0;                 /* clip over: let the mouth close */
         ESP_LOGD(TAG, "played %u mono frames @%dHz", (unsigned)total, sample_rate);
+        playback_ended();                /* clip over: let the mouth close */
         codec_unlock();
         return ESP_OK;
     }
 
-    if (ensure_open(sample_rate, channels, bits) != ESP_OK) { codec_unlock(); return ESP_FAIL; }
+    if (ensure_open(sample_rate, channels, bits) != ESP_OK) {
+        playback_ended();
+        codec_unlock();
+        return ESP_FAIL;
+    }
     int rc = esp_codec_dev_write(s_playback, (void *)pcm, len);
     if (rc != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "codec write failed: %d", rc);
         out = ESP_FAIL;
     }
+    playback_ended();
     codec_unlock();
     return out;
 }

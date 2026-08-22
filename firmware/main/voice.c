@@ -48,6 +48,15 @@ static volatile bool s_online, s_capturing, s_busy;
 /* Resolved at connect time rather than baked in, so changing the address in
  * settings takes effect without a reflash. */
 static char s_url[128];
+/* When a frame - any frame, including the proxy's keepalive ping - last
+ * arrived. The proxy pings every 20 s and terminates a client that misses one,
+ * so a board whose radio slept through the exchange ends up holding a socket
+ * the server has already closed. Nothing in the client notices: it reports
+ * connected, writes appear to succeed, and the next thing anyone finds out is
+ * that the robot has been deaf for an hour. */
+static uint32_t s_last_rx;
+#define LIVENESS_MS 70000        /* three missed pings, with room to spare */
+static uint32_t s_last_attempt;
 
 /* Reassembly for the current inbound message. */
 static uint8_t *s_seg;
@@ -151,6 +160,7 @@ static void on_ws(void *arg, esp_event_base_t base, int32_t id, void *data)
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED: {
         s_online = true;
+        s_last_rx = xTaskGetTickCount();
         char hello[192];
         snprintf(hello, sizeof(hello),
                  "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"0.2.0\",\"token\":\"%s\"}",
@@ -166,6 +176,7 @@ static void on_ws(void *arg, esp_event_base_t base, int32_t id, void *data)
         break;
 
     case WEBSOCKET_EVENT_DATA:
+        s_last_rx = xTaskGetTickCount();
         if (e->op_code == 0x08) { s_online = false; break; }
         if (e->op_code == 0x09 || e->op_code == 0x0A) break;      /* ping / pong */
 
@@ -280,8 +291,24 @@ static void ws_supervisor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
         if (!s_ws) continue;
 
-        if (s_online) { down_ticks = 0; continue; }
         if (!net_is_up()) { down_ticks = 0; continue; }   /* not our problem yet */
+
+        if (s_online) {
+            down_ticks = 0;
+            /* Believing we are connected is not evidence of it. */
+            uint32_t quiet = (xTaskGetTickCount() - s_last_rx) * portTICK_PERIOD_MS;
+            if (quiet > LIVENESS_MS) {
+                ESP_LOGW(TAG, "nothing from the proxy for %lu s - socket is stale",
+                         (unsigned long)(quiet / 1000));
+                s_online = false;
+                ui_set_gw_ok(false);
+                esp_websocket_client_stop(s_ws);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                esp_websocket_client_start(s_ws);
+                s_last_rx = xTaskGetTickCount();
+            }
+            continue;
+        }
 
         /* Give the client's own reconnect a fair chance first. */
         if (++down_ticks < 4) continue;
@@ -298,6 +325,12 @@ static void ws_supervisor_task(void *arg)
 void voice_kick(void)
 {
     if (!s_ws || s_online) return;
+    /* An attempt already in flight is not stuck. Without this, the got-IP
+     * handler and the boot task both fire and the second one tears down a
+     * handshake the first had halfway done. */
+    uint32_t since = (xTaskGetTickCount() - s_last_attempt) * portTICK_PERIOD_MS;
+    if (s_last_attempt && since < 6000) return;
+    s_last_attempt = xTaskGetTickCount();
     ESP_LOGI(TAG, "network back - reopening the socket");
     esp_websocket_client_stop(s_ws);
     esp_websocket_client_start(s_ws);
@@ -313,8 +346,15 @@ void voice_reconnect(void)
     esp_websocket_client_start(s_ws);
 }
 
+/* Idempotent, and safe to call from the got-IP handler. It used to be reached
+ * only from the boot task, behind a 25 s wait for an address - so on a network
+ * that took longer than that to associate, the socket was never opened at all
+ * and the board sat there permanently offline with a perfectly good link. */
 esp_err_t voice_connect(void)
 {
+    if (s_ws) { voice_kick(); return ESP_OK; }
+
+    s_last_attempt = xTaskGetTickCount();
     net_get_proxy_url(s_url, sizeof(s_url));
     esp_websocket_client_config_t cfg = {
         .uri                  = s_url,

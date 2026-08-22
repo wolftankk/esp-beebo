@@ -63,6 +63,14 @@ static esp_err_t wr(uint8_t reg, uint8_t val)
 bool imu_present(void) { return s_present; }
 int  imu_roll_deg(void) { return s_roll; }
 
+/* Mid-turn, counting the silence between two spoken sentences: audio alone
+ * goes false there, which was long enough for a shake to slip through and
+ * interrupt the answer between sentences. */
+static bool busy(void)
+{
+    return audio_is_playing() || ui_is_busy();
+}
+
 static void imu_task(void *arg)
 {
     int   shake_run = 0;
@@ -101,7 +109,10 @@ static void imu_task(void *arg)
         /* ---- shake ---- */
         float spin = fabsf(gx) + fabsf(gy) + fabsf(gz);
         if (spin > SHAKE_DPS) {
-            if (++shake_run >= SHAKE_HITS && now > shake_until) {
+            /* Not while it is speaking. Picking the board up to look at it is
+             * not a complaint, and squawking over the answer is worse than not
+             * reacting at all. */
+            if (++shake_run >= SHAKE_HITS && now > shake_until && !busy()) {
                 shake_until = now + SHAKE_HOLD_MS;
                 shake_run = 0;
                 ESP_LOGI(TAG, "shaken (%.0f dps) - dizzy", spin);
@@ -119,7 +130,11 @@ static void imu_task(void *arg)
         bool flat_now = az > FLAT_G && fabsf(ay) < 0.35f;
         if (flat_now) {
             if (!flat_since) flat_since = now;
-            if (!face_down && now - flat_since > FLAT_HOLD_MS) {
+            /* Held, not dropped, while it is talking: flat_since keeps running,
+             * so setting the board down mid-sentence takes effect as soon as
+             * the sentence ends instead of being lost. Deciding here rather
+             * than in ui.c keeps the two views of "face down" in step. */
+            if (!face_down && now - flat_since > FLAT_HOLD_MS && !busy()) {
                 face_down = true;
                 ESP_LOGI(TAG, "face down - going quiet");
                 ui_face_down(true);
