@@ -154,15 +154,47 @@ function speakable(text, truncate = true) {
   return t;
 }
 
-function fetchBuffer(url) {
+/* Written originally for the synthesiser's own audio URLs, which are direct
+ * 200s from a host that does not care who is asking. Anything off the open web
+ * needs more: redirects are the norm, a default Node user-agent gets 403d by
+ * plenty of hosts, and a silent non-200 used to arrive here as an empty buffer
+ * and the useless complaint "nothing to play". */
+const FETCH_MAX = 64 * 1024 * 1024;
+
+function fetchBuffer(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
-    const u = new URL(url);
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error(`bad url: ${url}`)); }
     const mod = u.protocol === "https:" ? https : http;
-    mod.get(u, (res) => {
+
+    const req = mod.get({
+      protocol: u.protocol, hostname: u.hostname, port: u.port,
+      path: u.pathname + u.search,
+      headers: { "User-Agent": "esp-beebo/0.1 (+https://github.com/wolftankk/esp-beebo)",
+                 Accept: "*/*" },
+    }, (res) => {
+      const code = res.statusCode;
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        if (!redirectsLeft) return reject(new Error(`too many redirects from ${url}`));
+        return resolve(fetchBuffer(new URL(res.headers.location, u).toString(), redirectsLeft - 1));
+      }
+      if (code !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${code} fetching ${u.hostname}${u.pathname}`));
+      }
       const chunks = [];
-      res.on("data", (c) => chunks.push(c));
+      let n = 0;
+      res.on("data", (c) => {
+        n += c.length;
+        if (n > FETCH_MAX) { req.destroy(); return reject(new Error("file too large")); }
+        chunks.push(c);
+      });
       res.on("end", () => resolve(Buffer.concat(chunks)));
-    }).on("error", reject);
+      res.on("error", reject);
+    });
+    req.setTimeout(60000, () => req.destroy(new Error(`timed out fetching ${u.hostname}`)));
+    req.on("error", reject);
   });
 }
 
