@@ -17,13 +17,17 @@
  *           {turn.done} {notify} {error}
  */
 const { WebSocketServer } = require("ws");
-const { transcribe, ask, speakable, synthesize, synthesizeStream, wrapWav, unavailableReason } = require("./pipeline");
+const { transcribe, ask, speakable, synthesize, synthesizeStream, wrapWav, unavailableReason, audioLinks, fetchBuffer } = require("./pipeline");
 const { toBoardWav } = require("./transcode");
 
 const TOKEN       = process.env.RELAY_TOKEN || "";     /* empty = LAN trust */
 const MAX_PCM     = 12 * 24000 * 2;                    /* 12 s at 24 kHz mono */
 const AUDIO_CHUNK = 4096;
 const MIN_SENTENCE = 6;                                /* characters */
+/* Audio the agent links to is played. Set PLAY_LINKS=0 to have it described
+ * instead, which is what you want if the agent hands out links you would
+ * rather not have come out of a speaker unannounced. */
+const PLAY_LINKS  = process.env.PLAY_LINKS !== "0";
 /* RELAY_TRACE=1 prints when each clause is handed to the synthesiser and when
  * its audio goes out. Worth having: "is it actually streaming" is otherwise a
  * question you can only answer by reading the source and hoping. */
@@ -325,7 +329,24 @@ async function runTurn(ws, pcm) {
       flush(reply.slice(spokenUpTo));
     }
     await chain;
-    send(ws, { type: "turn.done" });
+
+    /* If the agent answered with a link to audio - a song it found, a clip -
+     * play the thing rather than describing it. speakable() has already kept
+     * the URL out of the spoken text, since reading one aloud is a minute of
+     * punctuation. */
+    const links = PLAY_LINKS ? audioLinks(reply) : [];
+    for (const url of links.slice(0, 1)) {
+      try {
+        console.log(`[play] fetching ${url}`);
+        const file = await fetchBuffer(url);
+        const r = await playAll(file);
+        console.log(`[play] ${url} -> ${r.seconds.toFixed(1)}s`);
+      } catch (e) {
+        console.error(`[play] ${url} failed:`, e.message);
+      }
+    }
+
+    if (!links.length) send(ws, { type: "turn.done" });
 
     console.log(
       `[proxy] ${new Date().toISOString()} ${pcm.length}B pcm ` +

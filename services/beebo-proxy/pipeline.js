@@ -114,9 +114,22 @@ async function ask(text, onDelta = null, onSpeak = null) {
 
 /* Whatever the model writes still has to be read aloud, so strip what only
  * makes sense on a screen. */
+/* Links to audio the agent found. Everything else here turns words into
+ * speech; this is the one case where the answer is a file, and reading a URL
+ * out loud helps nobody. */
+const AUDIO_EXT = /\.(mp3|m4a|aac|wav|flac|ogg|opus|weba?)($|[?#])/i;
+
+function audioLinks(text) {
+  const urls = (text.match(/https?:\/\/[^\s)>\]"'，。；]+/g) || [])
+    .map((u) => u.replace(/[.,;:]+$/, ""));
+  return [...new Set(urls.filter((u) => AUDIO_EXT.test(u)))];
+}
+
 function speakable(text, truncate = true) {
   let t = text
     .replace(/```[\s\S]*?```/g, " ")
+    /* A URL read aloud is a minute of punctuation. */
+    .replace(/https?:\/\/\S+/g, " ")
     .replace(/^\s*\|.*\|\s*$/gm, " ")
     .replace(/^\s*[-*+]\s+/gm, "")
     .replace(/^#{1,6}\s*/gm, "")
@@ -246,4 +259,4 @@ function wrapWav(pcm, rate = 24000) {
 
 module.exports = {
   /* Null when a turn can run; otherwise why it cannot, phrased to be spoken. */
-  unavailableReason: () => gw.unavailableReason, synthesizeStream, fetchBuffer, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
+  unavailableReason: () => gw.unavailableReason, synthesizeStream, fetchBuffer, audioLinks, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
