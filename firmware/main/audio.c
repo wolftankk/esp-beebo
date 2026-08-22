@@ -80,8 +80,18 @@ static inline int16_t scale_sample(int16_t v, int gain_x10)
     return (int16_t)x;
 }
 
+/* Two halves of one sentence, normalised independently, step in volume in the
+ * middle of a word. When the proxy splits a clause to start playback early it
+ * marks the tail, and the tail reuses what the head worked out. */
+static int  s_last_gain;
+static bool s_hold_gain;
+
+void audio_hold_next_gain(void) { s_hold_gain = true; }
+
 static int normalisation_gain(const int16_t *pcm, size_t samples)
 {
+    if (s_hold_gain && s_last_gain) { s_hold_gain = false; return s_last_gain; }
+    s_hold_gain = false;
     int32_t peak = 0;
     for (size_t i = 0; i < samples; i++) {
         int32_t a = pcm[i] < 0 ? -(int32_t)pcm[i] : pcm[i];
@@ -287,6 +297,7 @@ esp_err_t audio_play_pcm(const uint8_t *pcm, size_t len,
         const int16_t *src = (const int16_t *)pcm;
         size_t total = len / 2;
         int gain = normalisation_gain(src, total);
+        s_last_gain = gain;
         for (size_t i = 0; i < total; i += FRAMES) {
             size_t n = (total - i < FRAMES) ? total - i : FRAMES;
             for (size_t j = 0; j < n; j++) {

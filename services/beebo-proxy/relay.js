@@ -17,7 +17,7 @@
  *           {turn.done} {notify} {error}
  */
 const { WebSocketServer } = require("ws");
-const { transcribe, ask, speakable, synthesize, wrapWav, unavailableReason } = require("./pipeline");
+const { transcribe, ask, speakable, synthesize, synthesizeStream, wrapWav, unavailableReason } = require("./pipeline");
 
 const TOKEN       = process.env.RELAY_TOKEN || "";     /* empty = LAN trust */
 const MAX_PCM     = 12 * 24000 * 2;                    /* 12 s at 24 kHz mono */
@@ -53,9 +53,13 @@ function clauses(text) {
 
 async function speakText(ws, text) {
   let index = 0;
+  const nextIndex = () => index++;
+  let opener = true;
   for (const clause of clauses(text)) {
     const spoken = speakable(clause, false);
-    if (spoken) await speakSegment(ws, spoken, index++);
+    if (!spoken) continue;
+    await speakSegment(ws, spoken, nextIndex, opener);
+    opener = false;
   }
   send(ws, { type: "turn.done" });
 }
@@ -87,21 +91,69 @@ function completeSentenceLength(pending, opening) {
   const min = opening ? 4 : MIN_SENTENCE;
   let cut = -1;
   for (let i = 0; i < pending.length; i++) {
-    if (enders.includes(pending[i])) cut = i;
+    if (enders.includes(pending[i])) { cut = i; continue; }
+    /* A full stop ends an English sentence, but only with a space or the end
+     * of the text after it - otherwise every decimal and abbreviation splits a
+     * clause down the middle. Without this the whole of an English reply after
+     * the opening clause arrived as one segment. */
+    if (pending[i] === "." && (i + 1 === pending.length || pending[i + 1] === " ")) cut = i;
   }
   return cut + 1 >= min ? cut + 1 : 0;
 }
 
-async function speakSegment(ws, text, index) {
+function sendAudio(ws, index, audio, holdGain) {
   if (ws.readyState !== ws.OPEN) return;
-  const audio = await synthesize(text);
-  if (ws.readyState !== ws.OPEN) return;
-  send(ws, { type: "audio.begin", index, bytes: audio.length });
+  send(ws, { type: "audio.begin", index, bytes: audio.length, hold_gain: !!holdGain });
   for (let at = 0; at < audio.length; at += AUDIO_CHUNK) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(audio.subarray(at, Math.min(at + AUDIO_CHUNK, audio.length)));
   }
   send(ws, { type: "audio.end", index });
+}
+
+/* The opening second of the first clause is sent as soon as it exists, ahead
+ * of the rest of that same clause.
+ *
+ * The synthesiser streams: measured, its first bytes arrive in about 250 ms
+ * where the finished clip takes 500-1000. The board plays whole segments, so
+ * the way to spend that is to cut the first clause in two and let it start on
+ * the head while the tail is still being made. Only the first clause needs it -
+ * every later one is already being synthesised while an earlier one plays.
+ *
+ * The seam is why the tail carries hold_gain: the board normalises each clip it
+ * receives, and two halves of one sentence normalised independently would step
+ * in volume in the middle of a word. */
+const HEAD_MS = parseInt(process.env.TTS_HEAD_MS || "1000", 10);
+const HEAD_BYTES = 44 + Math.round((HEAD_MS / 1000) * 24000 * 2);
+
+/* nextIndex() hands out segment numbers, because splitting a clause produces
+ * two of them and the caller cannot know in advance whether it will. */
+async function speakSegment(ws, text, nextIndex, splitHead) {
+  if (ws.readyState !== ws.OPEN) return;
+
+  if (!splitHead) {
+    const parts = [];
+    await synthesizeStream(text, (b) => parts.push(b));
+    return sendAudio(ws, nextIndex(), Buffer.concat(parts), false);
+  }
+
+  const parts = [];
+  let held = 0, headSent = false;
+  await synthesizeStream(text, (b) => {
+    parts.push(b);
+    held += b.length;
+    if (headSent || held < HEAD_BYTES) return;
+    headSent = true;
+    const all = Buffer.concat(parts);
+    sendAudio(ws, nextIndex(), all.subarray(0, HEAD_BYTES), false);
+    parts.length = 0;
+    parts.push(all.subarray(HEAD_BYTES));       /* the tail starts here */
+    held = 0;
+  });
+
+  const rest = Buffer.concat(parts);
+  if (!headSent) return sendAudio(ws, nextIndex(), rest, false);   /* too short to split */
+  if (rest.length) sendAudio(ws, nextIndex(), wrapWav(rest), true);
 }
 
 async function runTurn(ws, pcm) {
@@ -125,16 +177,22 @@ async function runTurn(ws, pcm) {
      * written, and synthesis of the next may finish before the previous. */
     let chain = Promise.resolve();
 
+    const nextIndex = () => index++;
+    /* Not "index === 0": indices are handed out when a segment is actually
+     * sent, which is later and inside the chain, so two clauses queued before
+     * the first synthesis finished would both believe they were the opener. */
+    let openerPending = true;
     const flush = (raw) => {
       const text = speakable(raw, false);
       if (!text) return;
-      const i = index++;
-      trace(Date.now() - t0, `flush #${i}: ${JSON.stringify(text).slice(0, 40)}`);
+      const first = openerPending;
+      openerPending = false;
+      trace(Date.now() - t0, `flush: ${JSON.stringify(text).slice(0, 40)}`);
       chain = chain.then(async () => {
         if (!firstAudioAt) firstAudioAt = Date.now();
         const s0 = Date.now();
-        await speakSegment(ws, text, i);
-        trace(Date.now() - t0, `sent  #${i} (tts ${Date.now() - s0}ms)`);
+        await speakSegment(ws, text, nextIndex, first);
+        trace(Date.now() - t0, `spoke (tts ${Date.now() - s0}ms)`);
       }).catch((e) => console.error("[relay] segment failed:", e.message));
     };
 

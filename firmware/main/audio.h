@@ -55,6 +55,11 @@ int       audio_output_level(void);
  * one defers the mute until it finishes rather than clipping the sentence. */
 bool      audio_is_playing(void);
 
+/* The next clip is the tail of one the proxy split to start playback early:
+ * reuse the gain the head settled on rather than normalising it on its own,
+ * which would step the volume mid-word. */
+void      audio_hold_next_gain(void);
+
 void      audio_chirp(void);   /* SND_BOOT, kept for existing call sites */
 void      audio_chime_async(void);   /* safe to call from a UI callback */
 

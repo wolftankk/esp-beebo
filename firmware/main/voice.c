@@ -40,7 +40,9 @@ static const char *TAG = "voice";
  * of the 7.5 MB free. */
 #define SEGMENT_QUEUE  8
 
-typedef struct { uint8_t *data; int len; } segment_t;
+typedef struct { uint8_t *data; int len;
+    bool     hold_gain;   /* tail of a split clause: keep the head's gain */
+} segment_t;
 
 static esp_websocket_client_handle_t s_ws;
 static QueueHandle_t s_segments;
@@ -57,6 +59,7 @@ static char s_url[128];
 static uint32_t s_last_rx;
 #define LIVENESS_MS 70000        /* three missed pings, with room to spare */
 static uint32_t s_last_attempt;
+static bool     s_seg_hold_gain;
 
 /* Reassembly for the current inbound message. */
 static uint8_t *s_seg;
@@ -106,16 +109,18 @@ static void handle_text(const char *json, int len)
 
     } else if (!strcmp(type, "audio.begin")) {
         const cJSON *b = cJSON_GetObjectItem(root, "bytes");
-        int want = cJSON_IsNumber(b) ? b->valueint : 128 * 1024;
+        int want = (cJSON_IsNumber(b) && b->valueint > 0) ? b->valueint : 128 * 1024;
         if (want > MAX_SEGMENT) want = MAX_SEGMENT;
         free(s_seg);
         s_seg = heap_caps_malloc(want, MALLOC_CAP_SPIRAM);
         s_seg_cap = s_seg ? want : 0;
         s_seg_len = 0;
+        const cJSON *hg = cJSON_GetObjectItem(root, "hold_gain");
+        s_seg_hold_gain = cJSON_IsTrue(hg);
 
     } else if (!strcmp(type, "audio.end")) {
         if (s_seg && s_seg_len > 44) {
-            segment_t seg = { .data = s_seg, .len = s_seg_len };
+            segment_t seg = { .data = s_seg, .len = s_seg_len, .hold_gain = s_seg_hold_gain };
             /* Waits for room rather than discarding. Dropping on a full queue
              * is what cut long answers off mid-sentence: the player is always
              * behind by design, so "behind" was never a reason to throw the
@@ -225,6 +230,7 @@ static void player_task(void *arg)
     for (;;) {
         if (xQueueReceive(s_segments, &seg, portMAX_DELAY) != pdTRUE) continue;
         ui_set_mood(MOOD_SPEAKING);
+        if (seg.hold_gain) audio_hold_next_gain();
         audio_play_wav(seg.data, seg.len);
         free(seg.data);
         /* Only settle once nothing else is waiting, so consecutive sentences

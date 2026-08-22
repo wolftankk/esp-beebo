@@ -158,6 +158,60 @@ function fetchBuffer(url) {
  * agent uses it as a tool - and borrowing it would mean this proxy breaks
  * whenever that gets reconfigured. Owning the whole audio path costs a few
  * lines and removes a dependency that was never ours. */
+/* Streaming synthesis. The service will hand back a whole clip and a URL to
+ * fetch it from, but it will also stream the same audio over SSE, and measured
+ * against each other the first bytes arrive in ~250 ms where the finished file
+ * takes 500-1000. For a robot that has already made you wait for an agent to
+ * think, that difference is the difference between answering and pausing.
+ *
+ * The stream is one WAV: the first chunk carries the RIFF header with a
+ * placeholder length, everything after it is more of the same data chunk. */
+function synthesizeStream(text, onChunk) {
+  return new Promise((resolve, reject) => {
+    if (!DASHSCOPE_KEY) return reject(new Error("DASHSCOPE_API_KEY is not set"));
+    const body = JSON.stringify({
+      model: TTS_MODEL,
+      input: { text, voice: TTS_VOICE, language_type: TTS_LANGUAGE },
+    });
+    const u = new URL(DASHSCOPE_URL);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname, method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + DASHSCOPE_KEY,
+        "X-DashScope-SSE": "enable",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`tts stream: HTTP ${res.statusCode}`));
+      }
+      let buf = "", total = 0;
+      res.on("data", (c) => {
+        buf += c.toString();
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const ev = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = ev.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          let j; try { j = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          const d = j.output && j.output.audio && j.output.audio.data;
+          if (!d) continue;
+          const b = Buffer.from(d, "base64");
+          total += b.length;
+          onChunk(b);
+        }
+      });
+      res.on("end", () => (total ? resolve(total) : reject(new Error("tts stream: no audio"))));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 async function synthesize(text) {
   if (!DASHSCOPE_KEY) throw new Error("DASHSCOPE_API_KEY is not set");
   const res = await dashscope({
@@ -192,4 +246,4 @@ function wrapWav(pcm, rate = 24000) {
 
 module.exports = {
   /* Null when a turn can run; otherwise why it cannot, phrased to be spoken. */
-  unavailableReason: () => gw.unavailableReason, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
+  unavailableReason: () => gw.unavailableReason, synthesizeStream, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };

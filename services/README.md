@@ -92,21 +92,44 @@ audio goes out, which is the only honest way to answer "is it actually
 streaming". Measured on the wire, driving the relay exactly as the board does:
 
 ```
-   +   1 ms  question sent
-   + 577 ms  heard: 给我讲一个三句话的小故事。
-   +3089 ms  flush #0  "宇航员在火星上种出了第一颗土豆，"   <- first clause, split on a comma
-   +3986 ms  audio #0 playable                              <- the speaker starts here
-   +4387 ms  reply COMPLETE (89 chars)                      <- 400 ms LATER than the first sound
-   +4564 ms  audio #1        +5610 ms  audio #2        +7234 ms  audio #3
+   +   4 ms  question sent
+   + 605 ms  heard: Tell me a three-sentence story about a robot.
+   +3360 ms  clause 1 complete, sent for synthesis
+   +3822 ms  audio playable            <- the speaker starts here
+   +4161 ms  reply COMPLETE (253 chars)  <- 339 ms LATER than the first sound
+   +4332 ms  audio 2      +5178 ms  audio 3      +5876 ms  audio 4
 ```
 
-So the streaming is real, but the grain is a clause, not a frame: each one is
-synthesised whole before it is sent. What that buys is the overlap - clauses 1
-to 3 arrive while clause 0 is still being spoken, so the speaker never starves
-and the total wait is the first clause rather than the whole answer.
+Two things make that work.
 
-What is left is mostly not ours. Of the four seconds before the first sound,
-about 2.5 is the agent thinking before it writes anything and 0.9 is the
-synthesiser's round trip; ASR is 0.6 and the transfer is negligible on a LAN.
-Streaming synthesis would take a chunk out of that 0.9, and nothing here can
-do much about the 2.5.
+**The reply is spoken as it is written.** The agent streams text roughly every
+200 ms; waiting for the finished reply threw that away. Each completed clause
+is synthesised and sent immediately, so clauses 2 to 4 arrive while clause 1 is
+still being spoken and the speaker never starves. The opening clause is allowed
+to break on a comma while later ones wait for a full stop, because almost all
+of the wait is in front of the first word and nothing after it is heard as a
+delay.
+
+**Synthesis is streamed, and the opening clause is cut in two.** The service
+will return a finished clip, but it will also stream the same audio over SSE,
+and measured against each other:
+
+| clause | finished clip | first streamed bytes | stream complete |
+|---|---|---|---|
+| "A lighthouse robot was programmed to keep the light on," | 1105 ms | **335 ms** | 800 ms |
+| "but nobody came for two hundred years." | 672 ms | **304 ms** | 645 ms |
+| "When a ship finally appeared on the horizon, it said welcome home." | 1036 ms | **310 ms** | 927 ms |
+
+The board plays whole segments, so the way to spend that head start is to send
+the first second of the opening clause as its own segment and let playback
+begin on it while the rest is still being made. It cut the wait for first audio
+from ~900 ms after the clause was ready to ~460 ms. Only the opening clause is
+split; every later one is already being synthesised while an earlier one plays.
+
+The seam is why the tail carries `hold_gain`. The board normalises each clip it
+receives, and two halves of one sentence normalised independently would step in
+volume in the middle of a word, so the tail reuses whatever the head settled on.
+
+What is left is mostly not ours. Of the ~3.8 s before the first sound, about
+2.7 is the agent thinking before it writes anything, 0.6 is speech-to-text, and
+0.5 is the synthesiser. Transfer is negligible on a LAN.
