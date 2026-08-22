@@ -51,6 +51,9 @@ bool ui_is_busy(void);
 /* An address arrived after the face had settled into MOOD_OFFLINE. */
 void ui_clear_offline(void);
 
+/* Signals that the board is up and ready - once, whoever gets there first. */
+void ui_announce_ready(void);
+
 void ui_notice_activity(void);
 
 /* --- what the IMU feeds the face --- */

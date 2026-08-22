@@ -223,6 +223,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
          * the boot task means an address arriving late is still an address. */
         voice_connect();
         ui_clear_offline();
+        ui_announce_ready();
     }
 }
 

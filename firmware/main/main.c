@@ -295,10 +295,7 @@ static void net_task(void *arg)
             voice_connect();                 /* now that there is a network */
             vTaskDelay(pdMS_TO_TICKS(1200));
 
-            ui_boot_done();
-            audio_chirp();                     /* proves the output path */
-            vTaskDelay(pdMS_TO_TICKS(1500));
-            ui_set_mood(MOOD_IDLE);
+            ui_announce_ready();               /* also proves the output path */
             vTaskDelete(NULL);
         }
         ui_log("wifi failed - open settings to pick a network");

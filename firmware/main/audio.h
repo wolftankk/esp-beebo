@@ -33,9 +33,11 @@ void      audio_record_stop(void);
  * Returns the sample count, or a negative value on error. */
 int       audio_record_read(int16_t *out, int max_samples);
 
-/* Astromech vocabulary. Swept, warbling sine chirps - the character comes
- * from the pitch gliding, not from the notes. Used only where the sound
- * carries information; a beep for every state change would just be noise. */
+/* Rocky's vocabulary: chords struck like a xylophone, all drawn from one
+ * pentatonic scale so no combination can sound wrong. The meaning is in the
+ * harmony rather than in a pitch gliding, which is what separates it from the
+ * astromech beeping this replaced. Used only where the sound carries
+ * information; a noise for every state change would just be noise. */
 typedef enum {
     SND_BOOT,     /* rising, curious - powering up         */
     SND_READY,    /* two quick notes - listening now       */

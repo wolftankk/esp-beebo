@@ -730,6 +730,22 @@ bool ui_screen_is_off(void) { return s_screen_off; }
 /* Mid-turn: listening, thinking, or partway through an answer. Distinct from
  * "audio is playing", which goes false in the gap between two sentences - long
  * enough for a shake to slip through and squawk over the reply. */
+/* "I am up." Fires once, on whichever of the two paths gets there first: the
+ * boot task when the network comes up inside its wait, or the got-IP handler
+ * when it takes longer than that. It used to live only in the boot task, so on
+ * a network that took more than twenty-five seconds to associate - which this
+ * access point regularly does - the board finished booting in silence and the
+ * face never left MOOD_OFFLINE. */
+void ui_announce_ready(void)
+{
+    static bool announced;
+    if (announced) return;
+    announced = true;
+    ui_boot_done();
+    audio_sound_async(SND_BOOT);
+    ui_set_mood(MOOD_IDLE);
+}
+
 /* The network came back after the face had already given up on it. Only
  * touches the offline state, so it cannot interrupt a turn in progress. */
 void ui_clear_offline(void)

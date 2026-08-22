@@ -477,47 +477,76 @@ int audio_record_read(int16_t *out, int max_samples)
     return frames;
 }
 
-/* Astromech vocabulary: swept sine with vibrato, which is how those beeps are
- * actually made. Phase accumulates across the whole sequence so frequency can
- * jump between segments without clicking - only amplitude discontinuities
- * click, and the envelope dips at each boundary to articulate the chirps.
- */
+/* Rocky, not R2-D2.
+ *
+ * The astromech voice was swept single tones - one pitch gliding, which is
+ * what makes it read as a machine straining. Rocky talks in chords: several
+ * notes struck together, like a xylophone, and the meaning is in the harmony
+ * rather than the glide. It is friendlier, and it is easier to synthesise
+ * because nothing has to sweep.
+ *
+ * Every note is drawn from one pentatonic scale, which is the trick that makes
+ * this work at all: no combination of its notes can sound wrong, so the chords
+ * can be picked for mood without anybody having to know harmony.
+ *
+ * The timbre is a struck bar - immediate attack, exponential decay, a little
+ * second and third harmonic for wood rather than a pure beep. */
+
+/* C major pentatonic. Kept above 500 Hz: the speaker is 20 mm across and
+ * everything below that is a rumour. */
+#define N_C5   523.25f
+#define N_D5   587.33f
+#define N_E5   659.25f
+#define N_G5   783.99f
+#define N_A5   880.00f
+#define N_C6  1046.50f
+#define N_D6  1174.66f
+#define N_E6  1318.51f
+#define N_G6  1568.00f
+/* Off the scale on purpose, and only used where something is wrong. */
+#define N_DB5  554.37f
+#define N_FS5  739.99f
+
 typedef struct {
-    int   f0, f1;      /* glide start and end, Hz           */
+    float f[3];      /* up to three notes struck together; 0 ends the chord */
     int   ms;
-    float vib_hz;      /* vibrato rate, 0 for a clean sweep */
-    float vib_depth;
-} chirp_seg_t;
+    float decay;     /* fraction of the note the sound takes to die away */
+} chord_t;
 
-static const chirp_seg_t k_boot[] = {
-    {  620, 1500, 110,  0.0f, 0.00f },
-    { 1700,  900,  80,  0.0f, 0.00f },
-    { 1050, 1050, 130, 22.0f, 0.06f },
-    {  760, 1900, 120,  0.0f, 0.00f },
-    { 2000, 1450,  90, 14.0f, 0.04f },
+/* Waking up: three chords climbing, each opening out wider than the last. */
+static const chord_t k_boot[] = {
+    { { N_C5, N_E5, N_G5 }, 170, 0.75f },
+    { { N_D5, N_G5, N_D6 }, 170, 0.75f },
+    { { N_E5, N_A5, N_E6 }, 260, 0.95f },
 };
-/* Short enough not to delay speaking - it fires the moment the key is held. */
-static const chirp_seg_t k_ready[] = {
-    { 1100, 1500, 55, 0.0f, 0.0f },
-    { 1800, 2000, 55, 0.0f, 0.0f },
+/* Listening. Two notes, quick and bright - it fires while the key is going
+ * down, so it must not delay anything. */
+static const chord_t k_ready[] = {
+    { { N_G5, N_D6, 0 },  70, 0.60f },
+    { { N_A5, N_E6, 0 },  90, 0.70f },
 };
-static const chirp_seg_t k_ok[] = {
-    {  900, 1400, 70, 0.0f, 0.0f },
+static const chord_t k_ok[] = {
+    { { N_C5, N_G5, N_E6 }, 150, 0.85f },
 };
-static const chirp_seg_t k_error[] = {
-    { 1300,  700, 140, 26.0f, 0.10f },
-    {  600,  420, 190, 18.0f, 0.08f },
+/* Something is wrong, and it says so by leaving the scale: a minor second
+ * against a tritone, then a drop. Nothing else in this vocabulary can make
+ * that sound, which is the point. */
+static const chord_t k_error[] = {
+    { { N_C5, N_DB5, N_FS5 }, 150, 0.70f },
+    { { N_DB5, N_FS5, 0 },    220, 0.90f },
 };
-static const chirp_seg_t k_sleep[] = {
-    { 1400,  600, 260, 10.0f, 0.05f },
-    {  600,  180, 340,  6.0f, 0.07f },
+/* Winding down: falling, and each chord given longer to die than the last. */
+static const chord_t k_sleep[] = {
+    { { N_E6, N_A5, 0 },   200, 0.85f },
+    { { N_D6, N_G5, 0 },   240, 0.90f },
+    { { N_C6, N_E5, N_C5 }, 420, 1.00f },
 };
 
-static void play_chirps(const chirp_seg_t *segs, size_t n, const char *name)
+static void play_chords(const chord_t *chords, size_t n, const char *name)
 {
     enum { RATE = 24000 };
     int total_ms = 0;
-    for (size_t i = 0; i < n; i++) total_ms += segs[i].ms;
+    for (size_t i = 0; i < n; i++) total_ms += chords[i].ms;
     int total = RATE * total_ms / 1000;
 
     int16_t *buf = heap_caps_malloc((size_t)total * sizeof(int16_t), MALLOC_CAP_SPIRAM);
@@ -526,28 +555,40 @@ static void play_chirps(const chirp_seg_t *segs, size_t n, const char *name)
         return;
     }
 
-    float phase = 0.0f;
     int at = 0;
-    for (size_t seg = 0; seg < n; seg++) {
-        const chirp_seg_t *c = &segs[seg];
-        int len = RATE * c->ms / 1000;
+    for (size_t c = 0; c < n; c++) {
+        const chord_t *ch = &chords[c];
+        int len = RATE * ch->ms / 1000;
+
+        int voices = 0;
+        for (int v = 0; v < 3; v++) if (ch->f[v] > 0.0f) voices++;
+        if (!voices) continue;
+
+        /* Struck, so every note in a chord starts at the same instant with the
+         * same phase - that alignment is what gives the attack its click. */
+        const float attack = 0.004f * RATE;
+        const float tau    = len * ch->decay / 3.0f;
+
         for (int i = 0; i < len && at < total; i++, at++) {
-            float t = (float)i / len;
-            float f = c->f0 + (c->f1 - c->f0) * t;
-            if (c->vib_hz > 0.0f)
-                f *= 1.0f + c->vib_depth * sinf(2.0f * (float)M_PI * c->vib_hz * i / RATE);
+            float t   = (float)i / RATE;
+            float env = expf(-(float)i / tau);
+            if (i < attack) env *= (float)i / attack;
 
-            phase += 2.0f * (float)M_PI * f / RATE;
-            if (phase > 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
-
-            float env = 1.0f, edge = 0.12f;
-            if (t < edge)          env = t / edge;
-            else if (t > 1 - edge) env = (1 - t) / edge;
-
-            buf[at] = (int16_t)(9000.0f * env * sinf(phase));
+            float sample = 0.0f;
+            for (int v = 0; v < 3; v++) {
+                float f = ch->f[v];
+                if (f <= 0.0f) continue;
+                float w = 2.0f * (float)M_PI * f * t;
+                /* A touch of second and third: wood rather than a test tone.
+                 * The third is detuned slightly, which is what stops a struck
+                 * bar sounding like an organ. */
+                sample += sinf(w) + 0.30f * sinf(2.0f * w) + 0.10f * sinf(3.02f * w);
+            }
+            buf[at] = (int16_t)(9000.0f * env * sample / (voices * 1.4f));
         }
     }
-    ESP_LOGI(TAG, "%s: %d ms", name, total_ms);
+    ESP_LOGI(TAG, "%s: %d ms, %u chord%s", name, total_ms,
+             (unsigned)n, n == 1 ? "" : "s");
     audio_play_pcm((const uint8_t *)buf, (size_t)at * sizeof(int16_t), RATE, 1, 16);
     free(buf);
 }
@@ -555,12 +596,12 @@ static void play_chirps(const chirp_seg_t *segs, size_t n, const char *name)
 void audio_sound(audio_sound_t which)
 {
     switch (which) {
-    case SND_READY: play_chirps(k_ready, sizeof(k_ready)/sizeof(k_ready[0]), "ready"); break;
-    case SND_OK:    play_chirps(k_ok,    sizeof(k_ok)/sizeof(k_ok[0]),       "ok");    break;
-    case SND_ERROR: play_chirps(k_error, sizeof(k_error)/sizeof(k_error[0]), "error"); break;
-    case SND_SLEEP: play_chirps(k_sleep, sizeof(k_sleep)/sizeof(k_sleep[0]), "sleep"); break;
+    case SND_READY: play_chords(k_ready, sizeof(k_ready)/sizeof(k_ready[0]), "ready"); break;
+    case SND_OK:    play_chords(k_ok,    sizeof(k_ok)/sizeof(k_ok[0]),       "ok");    break;
+    case SND_ERROR: play_chords(k_error, sizeof(k_error)/sizeof(k_error[0]), "error"); break;
+    case SND_SLEEP: play_chords(k_sleep, sizeof(k_sleep)/sizeof(k_sleep[0]), "sleep"); break;
     case SND_BOOT:
-    default:        play_chirps(k_boot,  sizeof(k_boot)/sizeof(k_boot[0]),   "boot");  break;
+    default:        play_chords(k_boot,  sizeof(k_boot)/sizeof(k_boot[0]),   "boot");  break;
     }
 }
 
