@@ -29,6 +29,7 @@ static volatile bool s_link_up;
 #define NVS_SSID "ssid"
 #define NVS_PASS "pass"
 #define NVS_KNOWN "known"
+#define NVS_PROXY "proxy"
 
 /* Every network whose password has been typed in, most recent first, so
  * picking a familiar name in the scanner does not ask for it again. One blob
@@ -131,6 +132,59 @@ bool net_known_pass(const char *ssid, char *pass, size_t len)
 }
 
 bool net_is_up(void) { return s_link_up; }
+
+/* ---- where the proxy is ----
+ *
+ * Compiled in is fine for a board you flash yourself, but the machine running
+ * the proxy is on DHCP and its address moves. Having to reflash the firmware
+ * because a laptop got a new lease is not a reasonable thing to ask, so the
+ * address is editable on the device and lives in NVS next to the wifi
+ * credentials. Empty means "use whatever was built in".
+ *
+ * What gets typed is an address, not a URL: the on-screen keyboard has digits,
+ * a dot and a colon, but no slash. So "192.168.1.42" and "192.168.1.42:9000"
+ * both work, and a full "ws://host:port/path" is accepted too for anyone
+ * pasting one in over serial. */
+void net_get_proxy_host(char *out, size_t len)
+{
+    if (!len) return;
+    out[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t n = len;
+    if (nvs_get_str(h, NVS_PROXY, out, &n) != ESP_OK) out[0] = '\0';
+    nvs_close(h);
+}
+
+void net_get_proxy_url(char *out, size_t len)
+{
+    char host[96];
+    net_get_proxy_host(host, sizeof(host));
+
+    if (!host[0]) { strlcpy(out, BEEBO_PROXY_URL, len); return; }
+    if (strstr(host, "://")) { strlcpy(out, host, len); return; }
+
+    /* A colon in the tail means they gave a port; an IPv6 literal would have
+     * more than one, and is not worth supporting on this keyboard. */
+    const char *colon = strrchr(host, ':');
+    if (colon && colon != host && strchr(host, ':') == colon)
+        snprintf(out, len, "ws://%s/ws", host);
+    else
+        snprintf(out, len, "ws://%s:%d/ws", host, BEEBO_PROXY_PORT);
+}
+
+esp_err_t net_set_proxy_host(const char *text)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    if (text && text[0]) err = nvs_set_str(h, NVS_PROXY, text);
+    else                 nvs_erase_key(h, NVS_PROXY);   /* back to the built-in */
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "proxy address set to \"%s\"", text && text[0] ? text : "(built-in)");
+    return err;
+}
 
 #define MAX_APS 24
 static wifi_ap_record_t s_aps[MAX_APS];

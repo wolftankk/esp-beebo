@@ -28,6 +28,13 @@ bool      net_is_up(void);
 bool      net_known_pass(const char *ssid, char *pass, size_t len);
 /* Drops a remembered network, so the next tap asks for the password again. */
 void      net_forget(const char *ssid);
+
+/* Where the proxy is. The address is editable on the device because the
+ * machine running it is on DHCP and its lease moves; reflashing for that is
+ * not a reasonable thing to ask. Empty host means the built-in default. */
+void      net_get_proxy_host(char *out, size_t len);   /* as typed, or "" */
+void      net_get_proxy_url(char *out, size_t len);    /* resolved, connectable */
+esp_err_t net_set_proxy_host(const char *text);        /* "" restores the built-in */
 bool      net_wait_ip(int timeout_ms);
 void      net_get_ip(char *out, size_t len);
 

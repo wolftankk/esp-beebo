@@ -51,6 +51,11 @@
 #define BEEBO_TZ           CONFIG_BEEBO_TZ
 #endif
 
+/* Used when the address typed on the device omits a port. */
+#ifndef BEEBO_PROXY_PORT
+#define BEEBO_PROXY_PORT   18797
+#endif
+
 /* Identifies this board to the proxy. Not a secret and not unique - the proxy
  * keys sessions on it, so change it if you run more than one. */
 #ifdef BEEBO_DEVICE_ID_ENV

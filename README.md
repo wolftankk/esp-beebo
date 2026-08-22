@@ -23,9 +23,10 @@ services/    the proxy that runs on your computer
   go quiet until you pick it up.
 - **It dozes.** After a configurable idle timeout the backlight, amplifier and
   radio wind down on their own.
-- **Set up on the device.** WiFi scanner and an on-screen keyboard laid out for
-  a panel 23 mm wide, plus brightness, volume and nap timeout. Networks you have
-  joined before are remembered, so picking one again does not ask for the password.
+- **Set up on the device.** WiFi scanner, the proxy address, brightness, volume
+  and nap timeout, all on an on-screen keyboard laid out for a panel 23 mm wide.
+  Networks you have joined before are remembered, so picking one again does not
+  ask for the password.
 - **It can speak first.** `POST /v1/notify` and the robot says it out loud.
 
 ## The shape
@@ -65,10 +66,13 @@ idf.py set-target esp32s3
 idf.py build flash monitor -p /dev/cu.usbmodem2101
 ```
 
-WiFi is best left to the on-device picker — what you type there goes to NVS
-rather than into the binary.
+WiFi and the proxy address are both best left to the on-device screens — what
+you type there goes to NVS rather than into the binary, and the machine running
+the proxy is usually on DHCP, so its address moves. Settings → the second row
+under `network` takes a bare address: `192.168.1.42`, or `192.168.1.42:9000` if
+you moved the port. Clearing it falls back to whatever was built in.
 
-Deployment settings come from the environment, so the repository carries
+The build-time value is the fallback, and it comes from the environment, so the repository carries
 placeholders and never a real address. `firmware/main/beebo_config.h` documents
 the precedence: **environment > menuconfig > default**. CMake reads the
 environment at configure time, so after changing a variable run
@@ -86,7 +90,7 @@ environment at configure time, so after changing a variable run
 | tilt the board | the head leans with it |
 | shake it | goes cross-eyed and squawks, then carries on |
 | set it face down | quiet until you lift it |
-| gear, top right | wifi, brightness, volume, nap timeout |
+| gear, top right | wifi, proxy address, brightness, volume, nap timeout |
 
 ## The board
 

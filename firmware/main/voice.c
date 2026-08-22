@@ -45,6 +45,9 @@ typedef struct { uint8_t *data; int len; } segment_t;
 static esp_websocket_client_handle_t s_ws;
 static QueueHandle_t s_segments;
 static volatile bool s_online, s_capturing, s_busy;
+/* Resolved at connect time rather than baked in, so changing the address in
+ * settings takes effect without a reflash. */
+static char s_url[128];
 
 /* Reassembly for the current inbound message. */
 static uint8_t *s_seg;
@@ -153,7 +156,7 @@ static void on_ws(void *arg, esp_event_base_t base, int32_t id, void *data)
                  "{\"type\":\"hello\",\"device\":\"%s\",\"fw\":\"0.2.0\",\"token\":\"%s\"}",
                  BEEBO_DEVICE_ID, BEEBO_PROXY_TOKEN);
         ws_send_json(hello);
-        ESP_LOGI(TAG, "connected to %s", BEEBO_PROXY_URL);
+        ESP_LOGI(TAG, "connected to %s", s_url);
         break;
     }
     case WEBSOCKET_EVENT_DISCONNECTED:
@@ -300,10 +303,21 @@ void voice_kick(void)
     esp_websocket_client_start(s_ws);
 }
 
+void voice_reconnect(void)
+{
+    if (!s_ws) return;
+    net_get_proxy_url(s_url, sizeof(s_url));
+    ESP_LOGI(TAG, "reconnecting to %s", s_url);
+    esp_websocket_client_stop(s_ws);
+    esp_websocket_client_set_uri(s_ws, s_url);
+    esp_websocket_client_start(s_ws);
+}
+
 esp_err_t voice_connect(void)
 {
+    net_get_proxy_url(s_url, sizeof(s_url));
     esp_websocket_client_config_t cfg = {
-        .uri                  = BEEBO_PROXY_URL,
+        .uri                  = s_url,
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms   = 10000,
         .buffer_size          = 4096,
@@ -323,7 +337,7 @@ esp_err_t voice_connect(void)
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, on_ws, NULL);
     ESP_ERROR_CHECK(esp_websocket_client_start(s_ws));
     xTaskCreate(ws_supervisor_task, "wssup", 3072, NULL, 3, NULL);
-    ESP_LOGI(TAG, "connecting to %s", BEEBO_PROXY_URL);
+    ESP_LOGI(TAG, "connecting to %s", s_url);
     return ESP_OK;
 }
 

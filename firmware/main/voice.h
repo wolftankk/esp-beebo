@@ -14,6 +14,9 @@ esp_err_t voice_connect(void);
  * since that backoff was measured against a network that did not exist. Safe
  * to call when already connected, and safe before voice_connect(). */
 void      voice_kick(void);
+
+/* The proxy address changed in settings. Re-reads it and reopens the socket. */
+void      voice_reconnect(void);
 /* Push-to-talk edges. Capture runs on its own task and meters the level into
  * the robot's grille; releasing hands the clip off for the round trip. */
 void voice_start(void);

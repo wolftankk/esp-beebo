@@ -14,6 +14,7 @@
 #include "ui_settings.h"
 #include "ui.h"
 #include "net.h"
+#include "voice.h"
 #include "settings.h"
 #include "batt.h"
 #include "audio.h"
@@ -228,6 +229,84 @@ static void kb_cb(lv_event_t *e)
     } else {
         lv_textarea_add_text(s_pw_ta, k);
     }
+}
+
+/* ---- proxy address ----
+ * Same keyboard, different destination. Opens on the numeric page because an
+ * address is mostly digits, a dot and a colon. */
+static lv_obj_t *s_px_scr, *s_px_ta, *s_px_status;
+
+static void px_back_cb(lv_event_t *e)
+{
+    lv_screen_load(s_menu ? s_menu : (lv_obj_t *)ui_home_screen());
+    lv_obj_del_async(s_px_scr);
+    s_px_scr = NULL;
+    s_px_ta = s_px_status = NULL;
+}
+
+static void px_kb_cb(lv_event_t *e)
+{
+    lv_obj_t *kb = lv_event_get_target(e);
+    const char *k = lv_buttonmatrix_get_button_text(kb, lv_buttonmatrix_get_selected_button(kb));
+    if (!k) return;
+
+    if (!strcmp(k, LV_SYMBOL_BACKSPACE))      lv_textarea_delete_char(s_px_ta);
+    else if (!strcmp(k, "123"))               lv_buttonmatrix_set_map(kb, kb_num);
+    else if (!strcmp(k, "ABC"))               lv_buttonmatrix_set_map(kb, kb_upper);
+    else if (!strcmp(k, "abc"))               lv_buttonmatrix_set_map(kb, kb_lower);
+    else if (!strcmp(k, LV_SYMBOL_OK)) {
+        net_set_proxy_host(lv_textarea_get_text(s_px_ta));
+        char url[128];
+        net_get_proxy_url(url, sizeof(url));
+        lv_label_set_text_fmt(s_px_status, "%s\nreconnecting...", url);
+        lv_obj_set_style_text_color(s_px_status, lv_color_hex(0xffab3d), 0);
+        voice_reconnect();
+    } else {
+        lv_textarea_add_text(s_px_ta, k);
+    }
+}
+
+static void px_open_cb(lv_event_t *e)
+{
+    s_px_scr = make_screen("PROXY", px_back_cb);
+
+    lv_obj_t *hint = lv_label_create(s_px_scr);
+    lv_obj_set_width(hint, W - 12);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x8a8070), 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 42);
+    lv_label_set_text(hint, "address of the machine\nrunning beebo-proxy");
+
+    s_px_ta = lv_textarea_create(s_px_scr);
+    lv_obj_set_size(s_px_ta, W - 12, 46);
+    lv_obj_align(s_px_ta, LV_ALIGN_TOP_MID, 0, 78);
+    lv_textarea_set_one_line(s_px_ta, true);
+    lv_textarea_set_placeholder_text(s_px_ta, "192.168.1.42");
+    lv_obj_set_style_text_font(s_px_ta, &lv_font_montserrat_18, 0);
+    char host[96];
+    net_get_proxy_host(host, sizeof(host));
+    if (host[0]) lv_textarea_set_text(s_px_ta, host);
+
+    s_px_status = lv_label_create(s_px_scr);
+    lv_obj_set_width(s_px_status, W - 12);
+    lv_label_set_long_mode(s_px_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_px_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_px_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_px_status, lv_color_hex(0x8a8070), 0);
+    lv_obj_align(s_px_status, LV_ALIGN_TOP_MID, 0, 128);
+    char url[128];
+    net_get_proxy_url(url, sizeof(url));
+    lv_label_set_text(s_px_status, url);
+
+    lv_obj_t *kb = lv_buttonmatrix_create(s_px_scr);
+    lv_buttonmatrix_set_map(kb, kb_num);
+    lv_obj_set_size(kb, W - 8, 340);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_add_event_cb(kb, px_kb_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_screen_load(s_px_scr);
 }
 
 static void pw_back_cb(lv_event_t *e)
@@ -580,6 +659,16 @@ void ui_settings_open(void)
     else
         lv_label_set_text(wl, LV_SYMBOL_WIFI "  not set");
     lv_obj_center(wl);
+
+    lv_obj_t *px_row = lv_button_create(body);
+    lv_obj_set_size(px_row, W - 2 * PAD - 10, 40);
+    lv_obj_add_event_cb(px_row, px_open_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *pxl = lv_label_create(px_row);
+    lv_obj_set_style_text_font(pxl, &lv_font_montserrat_14, 0);
+    char phost[96];
+    net_get_proxy_host(phost, sizeof(phost));
+    lv_label_set_text_fmt(pxl, LV_SYMBOL_UPLOAD "  %s", phost[0] ? phost : "proxy: built-in");
+    lv_obj_center(pxl);
 
     add_stepper(body, "brightness", &st->brightness, 10, 255, 25, true);
     add_stepper(body, "volume", &st->volume, 0, 100, 10, false);
