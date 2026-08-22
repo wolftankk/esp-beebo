@@ -23,6 +23,11 @@ const TOKEN       = process.env.RELAY_TOKEN || "";     /* empty = LAN trust */
 const MAX_PCM     = 12 * 24000 * 2;                    /* 12 s at 24 kHz mono */
 const AUDIO_CHUNK = 4096;
 const MIN_SENTENCE = 6;                                /* characters */
+/* RELAY_TRACE=1 prints when each clause is handed to the synthesiser and when
+ * its audio goes out. Worth having: "is it actually streaming" is otherwise a
+ * question you can only answer by reading the source and hoping. */
+const TRACE = process.env.RELAY_TRACE === "1";
+const trace = (ms, what) => { if (TRACE) console.log(`[relay]   +${ms}ms ${what}`); };
 
 const clients = new Set();
 
@@ -124,9 +129,12 @@ async function runTurn(ws, pcm) {
       const text = speakable(raw, false);
       if (!text) return;
       const i = index++;
+      trace(Date.now() - t0, `flush #${i}: ${JSON.stringify(text).slice(0, 40)}`);
       chain = chain.then(async () => {
         if (!firstAudioAt) firstAudioAt = Date.now();
+        const s0 = Date.now();
         await speakSegment(ws, text, i);
+        trace(Date.now() - t0, `sent  #${i} (tts ${Date.now() - s0}ms)`);
       }).catch((e) => console.error("[relay] segment failed:", e.message));
     };
 

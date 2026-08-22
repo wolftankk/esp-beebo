@@ -87,4 +87,26 @@ wait is almost entirely the agent's time to first token — about five seconds
 before any text exists at all — which is why the opening clause is allowed to
 break on a comma while later ones wait for a full stop.
 
-A typical turn now: `asr=450ms agent=2800ms first-audio=2799ms total=4708ms`.
+`RELAY_TRACE=1` prints when each clause goes to the synthesiser and when its
+audio goes out, which is the only honest way to answer "is it actually
+streaming". Measured on the wire, driving the relay exactly as the board does:
+
+```
+   +   1 ms  question sent
+   + 577 ms  heard: 给我讲一个三句话的小故事。
+   +3089 ms  flush #0  "宇航员在火星上种出了第一颗土豆，"   <- first clause, split on a comma
+   +3986 ms  audio #0 playable                              <- the speaker starts here
+   +4387 ms  reply COMPLETE (89 chars)                      <- 400 ms LATER than the first sound
+   +4564 ms  audio #1        +5610 ms  audio #2        +7234 ms  audio #3
+```
+
+So the streaming is real, but the grain is a clause, not a frame: each one is
+synthesised whole before it is sent. What that buys is the overlap - clauses 1
+to 3 arrive while clause 0 is still being spoken, so the speaker never starves
+and the total wait is the first clause rather than the whole answer.
+
+What is left is mostly not ours. Of the four seconds before the first sound,
+about 2.5 is the agent thinking before it writes anything and 0.9 is the
+synthesiser's round trip; ASR is 0.6 and the transfer is negligible on a LAN.
+Streaming synthesis would take a chunk out of that 0.9, and nothing here can
+do much about the 2.5.
