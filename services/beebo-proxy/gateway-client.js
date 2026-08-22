@@ -22,7 +22,21 @@ const IDENTITY  = path.join(STATE_DIR, "identity.json");
  * token out of - it comes from the environment like every other secret. */
 /* Defaults to the same machine. Point GATEWAY_URL at wherever the agent's
  * gateway actually listens; nothing real is committed here. */
-const GW_URL    = process.env.GATEWAY_URL || "ws://127.0.0.1:18789";
+/* Accepts "host:port" as well as a full URL. A bare host:port is the natural
+ * thing to write in a .env and it produced a WebSocket constructor throw that
+ * the retry loop swallowed - the proxy then retried a malformed address every
+ * five seconds forever, silently, and every turn failed with "gateway not
+ * connected" while the host was perfectly reachable. */
+function gatewayUrl(raw) {
+  const v = (raw || "").trim();
+  if (!v) return "ws://127.0.0.1:18789";
+  if (/^wss?:\/\//.test(v)) return v;
+  if (/^https?:\/\//.test(v)) return v.replace(/^http/, "ws");
+  console.warn(`[GW] GATEWAY_URL "${v}" has no scheme - reading it as ws://${v}`);
+  return "ws://" + v;
+}
+
+const GW_URL    = gatewayUrl(process.env.GATEWAY_URL);
 const SCOPES    = ["operator.read", "operator.write"];
 
 function readGatewayToken() { return process.env.OPENCLAW_GATEWAY_TOKEN || ""; }
@@ -59,6 +73,25 @@ class GatewayClient {
 
   start() { this._connect(); }
 
+  /* Repeated identical failures are logged once, then every tenth time. The
+   * failure mode here is a loop that runs for hours, and a line every three
+   * seconds buries everything else in the log. */
+  _complain(what) {
+    if (what === this._lastGripe) {
+      if (++this._gripes % 10) return;
+      console.error(`[GW] ${what} (still, x${this._gripes})`);
+      return;
+    }
+    this._lastGripe = what;
+    this._gripes = 1;
+    console.error(`[GW] ${what}`);
+  }
+
+  /* Why a turn cannot run right now, in words the robot can say. */
+  get unavailableReason() {
+    return this.ready ? null : `I cannot reach the agent at ${GW_URL} right now.`;
+  }
+
   _persist() {
     fs.writeFileSync(IDENTITY, JSON.stringify(this.id, null, 2), { mode: 0o600 });
   }
@@ -66,7 +99,12 @@ class GatewayClient {
   _connect() {
     this.ready = false;
     let ws;
-    try { ws = new WebSocket(GW_URL); } catch (e) {
+    try {
+      ws = new WebSocket(GW_URL);
+    } catch (e) {
+      /* Said out loud rather than swallowed: this is the branch a bad address
+       * lands in, and it used to retry in silence. */
+      this._complain(`cannot open ${GW_URL}: ${e.message}`);
       return setTimeout(() => this._connect(), 5000);
     }
     this.ws = ws;
@@ -123,12 +161,15 @@ class GatewayClient {
       }
     };
     ws.onclose = () => {
+      const wasReady = this.ready;
       this.ready = false;
       for (const [, w] of this.runs) { clearTimeout(w.timer); }
       this.runs.clear();
+      if (wasReady) console.warn(`[GW] disconnected from ${GW_URL} - reconnecting`);
+      else this._complain(`connection to ${GW_URL} closed before it was ready`);
       setTimeout(() => this._connect(), 3000);
     };
-    ws.onerror = () => {};
+    ws.onerror = (e) => this._complain(`${GW_URL}: ${e && e.message ? e.message : "connection error"}`);
   }
 
   _answerChallenge({ nonce, ts }) {

@@ -17,7 +17,7 @@
  *           {turn.done} {notify} {error}
  */
 const { WebSocketServer } = require("ws");
-const { transcribe, ask, speakable, synthesize, wrapWav } = require("./pipeline");
+const { transcribe, ask, speakable, synthesize, wrapWav, unavailableReason } = require("./pipeline");
 
 const TOKEN       = process.env.RELAY_TOKEN || "";     /* empty = LAN trust */
 const MAX_PCM     = 12 * 24000 * 2;                    /* 12 s at 24 kHz mono */
@@ -163,6 +163,14 @@ async function runTurn(ws, pcm) {
   } catch (err) {
     console.error("[relay] turn failed:", err.message);
     send(ws, { type: "error", message: String(err.message).slice(0, 120) });
+    /* A turn that dies leaves the robot staring back having heard you and said
+     * nothing, which is indistinguishable from it being broken. If the reason
+     * is something a person can act on, it says so out loud. */
+    const why = unavailableReason();
+    if (why) {
+      send(ws, { type: "reply", text: why });
+      await speakText(ws, why).catch(() => {});
+    }
     send(ws, { type: "state", value: "idle" });
   }
 }

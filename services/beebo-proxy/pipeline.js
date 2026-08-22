@@ -190,4 +190,6 @@ function wrapWav(pcm, rate = 24000) {
   return Buffer.concat([h, pcm]);
 }
 
-module.exports = { gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
+module.exports = {
+  /* Null when a turn can run; otherwise why it cannot, phrased to be spoken. */
+  unavailableReason: () => gw.unavailableReason, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
