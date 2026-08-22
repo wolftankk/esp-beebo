@@ -92,7 +92,17 @@ static void handle_text(const char *json, int len)
     /* The proxy's clock and zone. Arrives on connect and hourly after that,
      * which means the board is right without anyone configuring anything, and
      * stays right across a daylight-saving change. */
-    if (!strcmp(type, "time")) {
+    /* Everything queued, gone, and the clip in flight cut. Sent when a long
+     * file is playing and somebody wants it to stop; without it the only way
+     * out is the power button. */
+    if (!strcmp(type, "audio.stop")) {
+        segment_t drop;
+        int n = 0;
+        while (xQueueReceive(s_segments, &drop, 0) == pdTRUE) { free(drop.data); n++; }
+        audio_stop_playback();
+        ESP_LOGI(TAG, "stopped (%d queued segment%s dropped)", n, n == 1 ? "" : "s");
+
+    } else if (!strcmp(type, "time")) {
         const cJSON *tz = cJSON_GetObjectItem(root, "tz");
         if (cJSON_IsString(tz)) net_set_timezone(tz->valuestring);
 

@@ -18,6 +18,7 @@
  */
 const { WebSocketServer } = require("ws");
 const { transcribe, ask, speakable, synthesize, synthesizeStream, wrapWav, unavailableReason } = require("./pipeline");
+const { toBoardWav } = require("./transcode");
 
 const TOKEN       = process.env.RELAY_TOKEN || "";     /* empty = LAN trust */
 const MAX_PCM     = 12 * 24000 * 2;                    /* 12 s at 24 kHz mono */
@@ -86,6 +87,72 @@ async function speakText(ws, text) {
     opener = false;
   }
   send(ws, { type: "turn.done" });
+}
+
+/* Plays a whole audio file - an MP3 someone sent, a jingle, anything the
+ * transcoder reads.
+ *
+ * Paced rather than pushed. The board holds finished segments in a queue eight
+ * deep and blocks when it is full, so firing a four-minute file at it as fast
+ * as the socket allows would jam its receive task and start dropping the end.
+ * A segment is handed over roughly as fast as it is consumed, with a couple in
+ * hand so the speaker never starves.
+ *
+ * hold_gain on everything after the first: the board normalises each clip it
+ * receives, and a piece of music re-levelled every eight seconds pumps
+ * audibly. The opening segment sets the level and the rest keep it. */
+const PLAY_SECONDS = 8;
+const PLAY_LEAD    = 2;                       /* segments to keep in hand */
+
+async function playWav(ws, wav) {
+  let at = 12;
+  while (at + 8 < wav.length && wav.slice(at, at + 4).toString() !== "data")
+    at += 8 + wav.readUInt32LE(at + 4);
+  const pcm = wav.subarray(at + 8);
+
+  const step = PLAY_SECONDS * 24000 * 2;
+  const total = Math.ceil(pcm.length / step);
+  let index = 0;
+
+  for (let off = 0; off < pcm.length; off += step) {
+    if (ws.readyState !== ws.OPEN || playCancelled) return index;
+    sendAudio(ws, index, wrapWav(pcm.subarray(off, off + step)), index > 0);
+    index++;
+    if (index > PLAY_LEAD && off + step < pcm.length)
+      await new Promise((r) => setTimeout(r, PLAY_SECONDS * 1000));
+  }
+  send(ws, { type: "turn.done" });
+  return total;
+}
+
+/* Serialised. Two files playing at once interleave their segments on the wire
+ * and the board, which has no idea they came from different places, plays the
+ * result as one stream of nonsense. */
+let playChain = Promise.resolve();
+
+function stopAll() {
+  let n = 0;
+  for (const ws of clients) {
+    if (ws.readyState !== ws.OPEN) continue;
+    send(ws, { type: "audio.stop" });
+    n++;
+  }
+  playCancelled = true;
+  return n;
+}
+let playCancelled = false;
+
+async function playAll(input) {
+  const wav = await toBoardWav(input);
+  const seconds = (wav.length - 44) / 2 / 24000;
+  const boards = [...clients].filter((ws) => ws.readyState === ws.OPEN);
+
+  playChain = playChain.then(async () => {
+    playCancelled = false;
+    await Promise.all(boards.map((ws) =>
+      playWav(ws, wav).catch((e) => console.error("[play] failed:", e.message))));
+  });
+  return { boards: boards.length, seconds, queued: true };
 }
 
 function notifyAll(text) {
@@ -369,4 +436,4 @@ function attach(httpServer) {
   return wss;
 }
 
-module.exports = { attach, notifyAll, clientCount: () => clients.size };
+module.exports = { attach, notifyAll, playAll, stopAll, clientCount: () => clients.size };

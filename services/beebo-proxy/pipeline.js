@@ -246,4 +246,4 @@ function wrapWav(pcm, rate = 24000) {
 
 module.exports = {
   /* Null when a turn can run; otherwise why it cannot, phrased to be spoken. */
-  unavailableReason: () => gw.unavailableReason, synthesizeStream, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };
+  unavailableReason: () => gw.unavailableReason, synthesizeStream, fetchBuffer, gw, transcribe, ask, speakable, synthesize, wrapWav, SESSION };

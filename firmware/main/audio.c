@@ -187,6 +187,7 @@ static bool s_amp_on;
  * that mute - nodding off, the screen going out, the board being set face
  * down - none of which know or should know that audio is in flight. */
 static volatile int  s_playing;
+static volatile bool s_abort;
 static volatile bool s_amp_off_pending;
 
 static inline void codec_unlock(void)
@@ -212,6 +213,11 @@ void audio_amp_enable(bool on)
 }
 
 bool audio_is_playing(void) { return s_playing != 0; }
+
+/* Cuts the clip currently being written. The write loop checks between DMA
+ * chunks, so this lands within about twenty milliseconds rather than at the
+ * end of what could be eight seconds of music. */
+void audio_stop_playback(void) { if (s_playing) s_abort = true; }
 
 /* Called when a clip finishes: honours a mute that arrived while it ran. */
 static void playback_ended(void)
@@ -294,11 +300,13 @@ esp_err_t audio_play_pcm(const uint8_t *pcm, size_t len,
             return ESP_ERR_NO_MEM;
         }
 
+        s_abort = false;
         const int16_t *src = (const int16_t *)pcm;
         size_t total = len / 2;
         int gain = normalisation_gain(src, total);
         s_last_gain = gain;
         for (size_t i = 0; i < total; i += FRAMES) {
+            if (s_abort) { ESP_LOGI(TAG, "playback cut short"); break; }
             size_t n = (total - i < FRAMES) ? total - i : FRAMES;
             for (size_t j = 0; j < n; j++) {
                 int16_t v = scale_sample(src[i + j], gain);

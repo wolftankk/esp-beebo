@@ -13,8 +13,8 @@ require("./env");
  * held here, so the board needs no gateway credential of its own.
  */
 const http = require("http");
-const { attach, notifyAll, clientCount } = require("./relay");
-const { transcribe, ask, speakable, synthesize, gw, SESSION } = require("./pipeline");
+const { attach, notifyAll, playAll, stopAll, clientCount } = require("./relay");
+const { transcribe, ask, speakable, synthesize, gw, SESSION, fetchBuffer } = require("./pipeline");
 
 const PORT = parseInt(process.env.VOICE_PORT || "18797", 10);
 const MAX_BYTES = 9 * 1024 * 1024;
@@ -53,6 +53,36 @@ const server = http.createServer(async (req, res) => {
       console.log(`[notify] -> ${n} board(s): ${JSON.stringify(text).slice(0, 80)}`);
       return json(200, { delivered: n });
     } catch (e) {
+      return json(400, { error: String(e.message) });
+    }
+  }
+
+  /* Shut up. Clears whatever is queued on the board and cuts the current clip. */
+  if (req.method === "POST" && req.url.startsWith("/v1/stop")) {
+    const n = stopAll();
+    console.log(`[play] stop -> ${n} board(s)`);
+    return json(200, { stopped: n });
+  }
+
+  /* Play an audio file on the robot. The body is either the file itself, in
+   * whatever format the transcoder reads, or JSON with a url to fetch. The
+   * board decodes nothing - everything is converted here. */
+  if (req.method === "POST" && req.url.startsWith("/v1/play")) {
+    try {
+      const body = await readBody(req, 32 * 1024 * 1024);
+      let audio = body;
+      if ((req.headers["content-type"] || "").includes("application/json")) {
+        const { url } = JSON.parse(body.toString());
+        if (!url) return json(400, { error: "url required" });
+        audio = await fetchBuffer(url);
+      }
+      if (audio.length < 512) return json(400, { error: "nothing to play" });
+
+      const r = await playAll(audio);
+      console.log(`[play] ${audio.length}B -> ${r.boards} board(s), ${r.seconds.toFixed(1)}s`);
+      return json(200, r);
+    } catch (e) {
+      console.error("[play] failed:", e.message);
       return json(400, { error: String(e.message) });
     }
   }

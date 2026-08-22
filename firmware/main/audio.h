@@ -60,6 +60,9 @@ bool      audio_is_playing(void);
  * which would step the volume mid-word. */
 void      audio_hold_next_gain(void);
 
+/* Stop the clip being played right now. Takes effect between DMA chunks. */
+void      audio_stop_playback(void);
+
 void      audio_chirp(void);   /* SND_BOOT, kept for existing call sites */
 void      audio_chime_async(void);   /* safe to call from a UI callback */
 
