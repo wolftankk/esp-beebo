@@ -31,6 +31,30 @@ const trace = (ms, what) => { if (TRACE) console.log(`[relay]   +${ms}ms ${what}
 
 const clients = new Set();
 
+/* The machine running the proxy already knows what time it is and what zone it
+ * is in. Making the board ask a human to configure that - or worse, compiling
+ * it in - is asking for a setting that is wrong the first time somebody moves.
+ *
+ * POSIX TZ inverts the sign of the UTC offset, so UTC+8 is written "-8". The
+ * angle-bracket form avoids inventing an abbreviation the board would have to
+ * recognise. This carries no daylight-saving rule, only the offset in force
+ * right now, which is why it is re-sent rather than sent once. */
+function posixTz() {
+  const off = -new Date().getTimezoneOffset();        /* minutes east of UTC */
+  const a = Math.abs(off), h = Math.floor(a / 60), m = a % 60;
+  const label = `<${off >= 0 ? "+" : "-"}${String(h).padStart(2, "0")}${m ? String(m).padStart(2, "0") : ""}>`;
+  return `${label}${off >= 0 ? "-" : "+"}${h}${m ? ":" + String(m).padStart(2, "0") : ""}`;
+}
+
+function timeMessage() {
+  return {
+    type: "time",
+    epoch: Math.floor(Date.now() / 1000),
+    tz: posixTz(),
+    zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+}
+
 function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
@@ -279,6 +303,7 @@ function attach(httpServer) {
         clients.add(ws);
         console.log(`[relay] ${m.device || "device"} connected from ${who} (fw ${m.fw || "?"})`);
         send(ws, { type: "ready" });
+        send(ws, timeMessage());        /* before it can possibly need it */
         return;
       }
       if (!ws.greeted) return;
@@ -307,6 +332,13 @@ function attach(httpServer) {
     ws.on("error", () => clients.delete(ws));
   });
 
+  /* Hourly, so a board that stays connected across a daylight-saving change or
+   * a slow crystal does not quietly drift. It is forty bytes. */
+  const clock = setInterval(() => {
+    const msg = timeMessage();
+    for (const ws of wss.clients) send(ws, msg);
+  }, 3600000);
+
   const beat = setInterval(() => {
     for (const ws of wss.clients) {
       if (!ws.isAlive) { ws.terminate(); continue; }
@@ -314,7 +346,7 @@ function attach(httpServer) {
       ws.ping();
     }
   }, 20000);
-  wss.on("close", () => clearInterval(beat));
+  wss.on("close", () => { clearInterval(beat); clearInterval(clock); });
 
   console.log("[relay] websocket ready on /ws");
   return wss;

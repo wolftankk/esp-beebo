@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "ui.c" "ui_settings.c" "settings.c" "net.c" "batt.c" "audio.c" "expander.c" "voice.c" "probe.c" "imu.c" "fonts/lv_font_pixel_12.c"
+    SRCS "main.c" "ui.c" "ui_settings.c" "settings.c" "net.c" "batt.c" "audio.c" "expander.c" "voice.c" "probe.c" "imu.c" "rtc.c" "fonts/lv_font_pixel_12.c"
     INCLUDE_DIRS "." "fonts"
     REQUIRES board_bsp codec_board nvs_flash esp_wifi esp_netif esp-tls lwip json app_update esp_adc esp_http_client driver fatfs sdmmc esp_driver_sdmmc esp_driver_tsens spi_flash
 )

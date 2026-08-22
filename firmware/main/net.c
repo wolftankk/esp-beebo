@@ -8,6 +8,7 @@
 #include "beebo_config.h"
 #include "ui.h"
 #include "voice.h"
+#include "rtc.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +31,7 @@ static volatile bool s_link_up;
 #define NVS_PASS "pass"
 #define NVS_KNOWN "known"
 #define NVS_PROXY "proxy"
+#define NVS_TZ    "tz"
 
 /* Every network whose password has been typed in, most recent first, so
  * picking a familiar name in the scanner does not ask for it again. One blob
@@ -434,18 +436,70 @@ void net_get_ssid(char *out, size_t len)
  * has to land before any wss:// connection - but plain ws:// on the LAN does
  * not care, so it runs in the background rather than gating boot. Several
  * servers are listed because reachability varies a lot by network. */
+/* Applied before the RTC is read as well as here, because a time restored from
+ * the chip is UTC and means nothing on screen until this has run.
+ *
+ * The proxy sends the zone of the machine it runs on, which is almost always
+ * the right answer and needs nobody to configure anything. It is kept in NVS so
+ * the first seconds of a boot - before there is a network - are right too. The
+ * compiled-in value is only a fallback for a board that has never connected. */
+void net_apply_timezone(void)
+{
+    char tz[48] = "";
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = sizeof(tz);
+        if (nvs_get_str(h, NVS_TZ, tz, &n) != ESP_OK) tz[0] = '\0';
+        nvs_close(h);
+    }
+    setenv("TZ", tz[0] ? tz : BEEBO_TZ, 1);
+    tzset();
+    ESP_LOGI(TAG, "timezone %s (%s)", tz[0] ? tz : BEEBO_TZ,
+             tz[0] ? "from the proxy" : "built in");
+}
+
+void net_set_timezone(const char *tz)
+{
+    if (!tz || !tz[0]) return;
+    char cur[48] = "";
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = sizeof(cur);
+        if (nvs_get_str(h, NVS_TZ, cur, &n) != ESP_OK) cur[0] = '\0';
+        nvs_close(h);
+    }
+    if (!strcmp(cur, tz)) { setenv("TZ", tz, 1); tzset(); return; }
+
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_TZ, tz);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    setenv("TZ", tz, 1);
+    tzset();
+    ESP_LOGI(TAG, "timezone now %s", tz);
+}
+
+/* Every successful sync, not just the first: the chip drifts a couple of
+ * seconds a day, and this is free. */
+static void on_sntp_sync(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "ntp synced");
+    rtc_save_system_time();
+}
+
 void net_sntp_start(void)
 {
     /* Alibaba's numbered servers first: they answer reliably from mainland
      * networks, where pool.ntp.org times out often enough to matter. */
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
         3, ESP_SNTP_SERVER_LIST("ntp1.aliyun.com", "ntp2.aliyun.com", "pool.ntp.org"));
-    cfg.start = true;
+    cfg.start   = true;
+    cfg.sync_cb = on_sntp_sync;
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
         ESP_LOGW(TAG, "sntp init: %s", esp_err_to_name(err));
-    setenv("TZ", BEEBO_TZ, 1);
-    tzset();
+    net_apply_timezone();
 }
 
 bool net_time_valid(void)

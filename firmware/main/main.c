@@ -32,6 +32,7 @@
 #include "voice.h"
 #include "probe.h"
 #include "imu.h"
+#include "rtc.h"
 #include <math.h>
 
 static const char *TAG = "main";
@@ -286,9 +287,9 @@ static void net_task(void *arg)
             ui_set_wifi_state(true);
             ESP_LOGI(TAG, "ip %s", ip);
 
-            net_sntp_start();                 /* lands in the background */
+            net_sntp_start();                 /* lands in the background, and
+                                                 writes the RTC when it does */
             ui_boot_step(3, "clock");
-            xTaskCreate(clock_task, "clock", 3072, NULL, 2, NULL);
 
             ui_boot_step(4, "proxy");
             voice_connect();                 /* now that there is a network */
@@ -382,8 +383,14 @@ void app_main(void)
     }
     /* Starts the one connection the board keeps: audio up, audio and text
      * down, and anything the proxy sends unprompted. */
-    /* After audio: the IMU shares the system I2C bus that the codec stands up. */
+    /* After audio: both share the system I2C bus that the codec stands up. */
     if (imu_start() != ESP_OK) ESP_LOGW(TAG, "no IMU - the face will not lean");
+
+    /* Before the network, which is the entire point: the clock used to read
+     * "--:--" for as long as the association took, and forever without one. */
+    net_apply_timezone();
+    if (rtc_start() == ESP_OK) rtc_restore_system_time();
+    xTaskCreate(clock_task, "clock", 3072, NULL, 2, NULL);
 
     if (voice_init() == ESP_OK) voice_start_capture_task();
     else ESP_LOGE(TAG, "voice client failed to start");

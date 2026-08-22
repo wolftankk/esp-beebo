@@ -54,6 +54,12 @@ void      net_get_ssid(char *out, size_t len);
 void      net_set_power_save(bool on);
 
 void      net_sntp_start(void);
+/* Applies BEEBO_TZ. Needed before any local time is displayed, including one
+ * restored from the RTC before the network exists. */
+void      net_apply_timezone(void);
+/* POSIX TZ string, as reported by the machine running the proxy. Persisted, so
+ * the clock is right from the first second of the next boot. */
+void      net_set_timezone(const char *tz);
 bool      net_time_valid(void);
 
 #ifdef __cplusplus

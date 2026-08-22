@@ -21,6 +21,10 @@ services/    the proxy that runs on your computer
 - **It notices being handled.** Tilt it and the head leans. Shake it and it goes
   cross-eyed and squawks. Set it face down and the screen, amplifier and radio
   go quiet until you pick it up.
+- **It knows what time it is before it knows whether it has a network.** The
+  PCF85063 is read into the system clock about two seconds into boot; NTP and
+  the proxy only ever correct it. The timezone comes from whichever machine
+  runs the proxy, so there is nothing to configure and nothing to get wrong.
 - **It dozes.** After a configurable idle timeout the backlight, amplifier and
   radio wind down on their own.
 - **Set up on the device.** WiFi scanner, the proxy address, brightness, volume
@@ -98,6 +102,27 @@ Waveshare ESP32-S3-Touch-LCD-3.49: ESP32-S3R8, 16 MB flash, 8 MB octal PSRAM,
 172×640 AXS15231B panel with integrated touch, ES8311 out through an NS4150B,
 ES7210 four-channel input with a dual mic array, TCA9554 expander, QMI8658 IMU,
 PCF85063 RTC, microSD on SDMMC.
+
+### Time
+
+The clock used to read `--:--` from boot until NTP landed - measured on one
+desk, eight to thirty-four seconds - and forever on a board that never got a
+network. That is backwards: the board has a real-time clock on it.
+
+So the RTC is the clock and everything else is a correction to it. It is read
+into the system clock before the network is even started, NTP writes back to it
+on every successful sync, and the proxy sends the time on connect and hourly
+after that.
+
+The timezone comes from the proxy too, as a POSIX TZ string derived from the
+machine it runs on, and is kept in NVS so the first second of the next boot is
+already right. `BEEBO_TZ` in the build is only the fallback for a board that
+has never connected to anything. POSIX inverts the sign of a UTC offset, which
+is why UTC+8 is written `-8`; the proxy emits the unambiguous `<+08>-8` form.
+
+The one thing this does not carry is a daylight-saving rule - only the offset in
+force at the moment it was sent. That is why the proxy re-sends hourly rather
+than once.
 
 `firmware/main/probe.c` logs a census at every boot — I2C addresses, the IMU,
 the RTC, the card slot, PSRAM, die temperature — so a part that is absent reads

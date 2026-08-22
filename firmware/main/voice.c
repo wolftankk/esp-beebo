@@ -18,6 +18,9 @@
 #include "audio.h"
 #include "ui.h"
 #include "net.h"
+#include "rtc.h"
+#include <sys/time.h>
+#include <stdlib.h>
 #include "esp_websocket_client.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -86,7 +89,27 @@ static void handle_text(const char *json, int len)
     /* Partial text while the agent is still writing. Same label as the final
      * reply, just replaced as it grows, so the screen fills as the words
      * arrive instead of staying blank until the whole answer exists. */
-    if (!strcmp(type, "reply.partial")) {
+    /* The proxy's clock and zone. Arrives on connect and hourly after that,
+     * which means the board is right without anyone configuring anything, and
+     * stays right across a daylight-saving change. */
+    if (!strcmp(type, "time")) {
+        const cJSON *tz = cJSON_GetObjectItem(root, "tz");
+        if (cJSON_IsString(tz)) net_set_timezone(tz->valuestring);
+
+        const cJSON *ep = cJSON_GetObjectItem(root, "epoch");
+        if (cJSON_IsNumber(ep) && ep->valuedouble > 1735689600.0) {
+            struct timeval tv = { .tv_sec = (time_t)ep->valuedouble, .tv_usec = 0 };
+            time_t before = time(NULL);
+            settimeofday(&tv, NULL);
+            /* Only worth a flash write when it actually moved. */
+            if (llabs((long long)tv.tv_sec - (long long)before) > 2) {
+                ESP_LOGI(TAG, "clock set from the proxy (was off by %llds)",
+                         (long long)(tv.tv_sec - before));
+                rtc_save_system_time();
+            }
+        }
+
+    } else if (!strcmp(type, "reply.partial")) {
         const cJSON *x = cJSON_GetObjectItem(root, "text");
         if (cJSON_IsString(x)) ui_set_reply(x->valuestring);
 
