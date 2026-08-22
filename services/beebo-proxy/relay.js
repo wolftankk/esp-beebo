@@ -30,11 +30,39 @@ function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
 
+/* Splits into the same clause-sized pieces a streamed reply is broken into, so
+ * a long notification starts playing after the first sentence rather than
+ * after the synthesiser has worked through all of it. */
+function clauses(text) {
+  const out = [];
+  let at = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (!"。！？!?\n".includes(text[i])) continue;
+    if (i + 1 - at < MIN_SENTENCE) continue;
+    out.push(text.slice(at, i + 1));
+    at = i + 1;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out.filter((c) => c.trim());
+}
+
+async function speakText(ws, text) {
+  let index = 0;
+  for (const clause of clauses(text)) {
+    const spoken = speakable(clause, false);
+    if (spoken) await speakSegment(ws, spoken, index++);
+  }
+  send(ws, { type: "turn.done" });
+}
+
 function notifyAll(text) {
   let n = 0;
   for (const ws of clients) {
     if (ws.readyState !== ws.OPEN) continue;
     send(ws, { type: "notify", text });
+    /* Said out loud, not just put on the screen. A notification the robot
+     * only displays is one you have to already be looking at. */
+    speakText(ws, text).catch((e) => console.error("[notify] speak failed:", e.message));
     n++;
   }
   return n;
