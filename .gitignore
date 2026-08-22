@@ -1,0 +1,21 @@
+# ESP-IDF build output and generated configuration
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+
+# Local build settings: real hostnames and credentials live here
+firmware/build-env.sh
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Secrets and runtime state
+.env
+*.env
+!.env.example
+.state/
+
+.DS_Store

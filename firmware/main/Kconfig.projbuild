@@ -1,0 +1,40 @@
+menu "esp-beebo"
+
+    config BEEBO_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Optional. Leaving it empty is the normal case: credentials are
+            entered on the device, in settings, and kept in NVS. Setting it
+            here only pre-seeds the first boot.
+            2.4 GHz only - the ESP32-S3 has no 5 GHz radio.
+
+    config BEEBO_WIFI_PASS
+        string "WiFi password"
+        default ""
+
+    config BEEBO_PROXY_URL
+        string "Proxy WebSocket endpoint"
+        default "ws://192.168.1.100:18797/ws"
+        help
+            Where beebo-proxy is listening. Change the host to the machine you
+            run it on; the board reaches it directly over the LAN.
+            One connection carries everything: audio up, audio and text down,
+            and anything the server sends unprompted.
+
+    config BEEBO_PROXY_TOKEN
+        string "Proxy token (optional)"
+        default ""
+        help
+            Must match RELAY_TOKEN in the proxy's .env. Empty on both sides
+            means any device on the LAN may connect.
+
+    config BEEBO_TZ
+        string "POSIX timezone"
+        default "UTC0"
+        help
+            POSIX TZ string, e.g. "CST-8" for China, "GMT0BST,M3.5.0/1,M10.5.0"
+            for the UK. Note the POSIX sign convention is inverted from UTC
+            offsets: UTC+8 is written "-8".
+
+endmenu

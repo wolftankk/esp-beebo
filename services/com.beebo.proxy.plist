@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Optional: keep the proxy running across logins.
+     Replace REPO with the absolute path to your checkout, then:
+       cp com.beebo.proxy.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/com.beebo.proxy.plist
+     uninstall:
+       launchctl unload ~/Library/LaunchAgents/com.beebo.proxy.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.beebo.proxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>REPO/services/beebo-proxy/server.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>REPO/services/beebo-proxy</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/beebo-proxy.log</string>
+  <key>StandardErrorPath</key><string>/tmp/beebo-proxy.log</string>
+</dict>
+</plist>

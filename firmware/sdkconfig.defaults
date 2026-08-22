@@ -1,0 +1,52 @@
+# ---- target / flash / psram (ESP32-S3R8, 16MB flash, 8MB octal PSRAM) ----
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+# 80 MHz reads were coming back as 0xffffffff often enough for the bootloader
+# to declare the app partition unbootable and reset. 40 MHz trades a little
+# cache-miss latency for reads that actually land.
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# ---- partition table ----
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- console over native USB (board Type-C is USB-Serial-JTAG) ----
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---- runtime ----
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ---- websocket client (needed for the openclaw gateway link) ----
+CONFIG_ESP_WEBSOCKET_CLIENT_ENABLE_DYNAMIC_BUFFER=y
+
+# ---- LVGL 9 ----
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_OS_FREERTOS=y
+# LVGL puts ~100 KB of its hot code in internal RAM when this is on.
+# That was affordable until the I2S DMA descriptors needed the same pool.
+# CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM is not set
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+
+# ---- SNTP: several servers, because reachability varies a lot by network ----
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# ---- Internal RAM is the tight resource once the I2S DMA buffers exist:
+# LVGL alone holds ~167 KB of DIRAM, and the codec took what was left, which
+# starved the wifi driver of RX buffers and boot-looped the board. ----
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+
+# ---- Console over USB-CDC blocks when the host stops reading, which wedged
+# whichever task was logging - including the LVGL task. Keep runtime logging
+# sparse so an unattended board never fills the buffer. ----
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y

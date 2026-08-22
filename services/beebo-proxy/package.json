@@ -1,0 +1,9 @@
+{
+  "name": "esp-beebo-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bridges the ESP32-S3 board to an OpenClaw agent: speech in, speech out.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}
